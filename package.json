@@ -2,7 +2,7 @@
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
   "description": "Edit Markdown with a live neumorphic preview and export to Word (.docx), inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "docxmd",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other", "Formatters"],
@@ -20,7 +20,7 @@
         "viewType": "docxmd.editor",
         "displayName": "DOCXMD Editor",
         "selector": [{ "filenamePattern": "*.md" }, { "filenamePattern": "*.markdown" }],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "commands": [
