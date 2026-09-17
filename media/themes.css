@@ -1,0 +1,70 @@
+/* ============================================================
+   DOCXMD — Theme variables (4 themes, neumorphic "embossed metal")
+   Mirrors the palette & style of example.html
+   Themes: dark (default), blue (Dark Blue), green (Dark Green), white
+   ============================================================ */
+
+/* Play font (from /font) */
+@font-face {
+  font-family: "Play";
+  src: url("font/Play-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Play";
+  src: url("font/Play-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root, [data-theme="dark"] {
+  --bg-base: #121212;   --bg-card: #1e1e1e;
+  --text-main: #e0e0e0; --text-muted: #a0a0a0;
+  --accent: #007bff;    --accent-contrast: #ffffff;
+  --shadow-light: rgba(255, 255, 255, 0.05);
+  --shadow-dark: rgba(0, 0, 0, 0.6);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --danger: #ff5c5c; --success: #33d17a; --warning: #f5a623;
+  --code-bg: #0d0d0d; --code-text: #e6e6e6;
+  --sel: rgba(0, 123, 255, 0.35);
+  --hljs: "hljs-github-dark";
+}
+[data-theme="blue"] {
+  --bg-base: #0a192f;   --bg-card: #112240;
+  --text-main: #ccd6f6; --text-muted: #8892b0;
+  --accent: #64ffda;    --accent-contrast: #0a192f;
+  --shadow-light: rgba(100, 255, 218, 0.05);
+  --shadow-dark: rgba(2, 12, 27, 0.7);
+  --border-subtle: rgba(100, 255, 218, 0.1);
+  --danger: #ff6b6b; --success: #64ffda; --warning: #ffd166;
+  --code-bg: #061021; --code-text: #ccd6f6;
+  --sel: rgba(100, 255, 218, 0.25);
+  --hljs: "hljs-github-dark";
+}
+[data-theme="green"] {
+  --bg-base: #0d1f17;   --bg-card: #143022;
+  --text-main: #d1e7dd; --text-muted: #8bb8a3;
+  --accent: #28a745;    --accent-contrast: #ffffff;
+  --shadow-light: rgba(40, 167, 69, 0.05);
+  --shadow-dark: rgba(0, 0, 0, 0.7);
+  --border-subtle: rgba(40, 167, 69, 0.1);
+  --danger: #ff6b6b; --success: #52d869; --warning: #ffd166;
+  --code-bg: #08160f; --code-text: #d1e7dd;
+  --sel: rgba(40, 167, 69, 0.3);
+  --hljs: "hljs-github-dark";
+}
+[data-theme="white"] {
+  --bg-base: #e0e5ec;   --bg-card: #e0e5ec;
+  --text-main: #2d3436; --text-muted: #636e72;
+  --accent: #0984e3;    --accent-contrast: #ffffff;
+  --shadow-light: #ffffff;
+  --shadow-dark: #b8c5d6;
+  --border-subtle: rgba(255, 255, 255, 0.7);
+  --danger: #d63031; --success: #00b894; --warning: #e17055;
+  --code-bg: #d5dbe4; --code-text: #2d3436;
+  --sel: rgba(9, 132, 227, 0.25);
+  --hljs: "hljs-github";
+}

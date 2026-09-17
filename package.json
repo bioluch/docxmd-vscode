@@ -1,0 +1,39 @@
+{
+  "name": "docxmd",
+  "displayName": "DOCXMD — Markdown editor & DOCX converter",
+  "description": "Edit Markdown with a live neumorphic preview and export to Word (.docx), inside VS Code. Companion to the DOCXMD PWA.",
+  "version": "0.1.0",
+  "publisher": "docxmd",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other", "Formatters"],
+  "keywords": ["markdown", "docx", "word", "preview", "converter"],
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://docxmd.pp.ua",
+  "repository": { "type": "git", "url": "https://docxmd.pp.ua" },
+  "bugs": { "email": "bioluch@gmail.com" },
+  "activationEvents": [],
+  "main": "./extension.js",
+  "icon": "media/icon.png",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "docxmd.editor",
+        "displayName": "DOCXMD Editor",
+        "selector": [{ "filenamePattern": "*.md" }, { "filenamePattern": "*.markdown" }],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      { "command": "docxmd.openWith", "title": "DOCXMD: Open in DOCXMD Editor", "category": "DOCXMD" },
+      { "command": "docxmd.exportDocx", "title": "DOCXMD: Export to Word (.docx)", "category": "DOCXMD" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "docxmd.exportDocx", "when": "activeCustomEditorId == docxmd.editor", "group": "navigation" }
+      ],
+      "explorer/context": [
+        { "command": "docxmd.openWith", "when": "resourceExtname == .md || resourceExtname == .markdown", "group": "navigation" }
+      ]
+    }
+  }
+}
