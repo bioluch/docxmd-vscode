@@ -232,8 +232,22 @@
   function mapAlign(a, D) {
     if (a === "center") return D.AlignmentType.CENTER;
     if (a === "right") return D.AlignmentType.RIGHT;
+    if (a === "justify") return D.AlignmentType.JUSTIFIED;
     return D.AlignmentType.LEFT;
   }
+
+  // Read a text alignment from an HTML wrapper token (<div align="center">,
+  // <p style="text-align:right">, <center>…). Returns null when there is none.
+  function alignFromHtml(raw) {
+    const s = String(raw);
+    if (/<center[\s>]/i.test(s)) return "center";
+    let m = s.match(/align\s*=\s*["']?\s*(left|right|center|justify)/i);
+    if (m) return m[1].toLowerCase();
+    m = s.match(/text-align\s*:\s*(left|right|center|justify)/i);
+    if (m) return m[1].toLowerCase();
+    return null;
+  }
+  const isClosingHtml = (raw) => /<\/\s*(div|p|center)\s*>/i.test(String(raw));
 
   // ---- Main --------------------------------------------------------------
   async function toBlob(markdown, opts, onProgress) {
@@ -267,6 +281,9 @@
     let olInstance = 0;
     const total = tokens.length || 1;
     const H = HEADING(D);
+    // Text-alignment context, driven by <div align="…"> wrappers in the source.
+    const alignStack = [];
+    const curAlign = () => (alignStack.length ? alignStack[alignStack.length - 1] : null);
 
     for (let i = 0; i < tokens.length; i++) {
       const tk = tokens[i];
@@ -276,12 +293,14 @@
             body.push(new D.Paragraph({
               heading: H[tk.depth] || D.HeadingLevel.HEADING_6,
               children: inlineRuns(tk.tokens, {}, imgMap, D),
+              alignment: mapAlign(curAlign(), D),
               spacing: { before: 240, after: 80 }
             }));
             break;
           case "paragraph":
             body.push(new D.Paragraph({
               children: inlineRuns(tk.tokens, {}, imgMap, D),
+              alignment: mapAlign(curAlign(), D),
               spacing: { after: 120 }
             }));
             break;
@@ -316,10 +335,25 @@
             break;
           case "space":
             break;
-          case "html":
-            { const txt = String(tk.text || "").replace(/<[^>]*>/g, "").trim();
-              if (txt) body.push(new D.Paragraph({ children: [mkRun(decode(txt), {}, D)] })); }
+          case "__alignpush": alignStack.push(tk.a); break;
+          case "__alignpop": alignStack.pop(); break;
+          case "html": {
+            const raw = String(tk.text || "");
+            const al = alignFromHtml(raw), closing = isClosingHtml(raw);
+            if (al && closing) {
+              // Self-contained <div align="x"> … </div> on one block: re-lex the
+              // inner Markdown and process it between push/pop markers.
+              const inner = raw.replace(/^\s*<[^>]+>/, "").replace(/<\/[^>]+>\s*$/, "").trim();
+              const innerToks = global.marked.lexer(inner);
+              tokens.splice(i + 1, 0, { type: "__alignpush", a: al }, ...innerToks, { type: "__alignpop" });
+              break;
+            }
+            if (al) { alignStack.push(al); break; }      // opening wrapper
+            if (closing && alignStack.length) { alignStack.pop(); break; } // closing wrapper
+            const txt = raw.replace(/<[^>]*>/g, "").trim();
+            if (txt) body.push(new D.Paragraph({ children: [mkRun(decode(txt), {}, D)], alignment: mapAlign(curAlign(), D) }));
             break;
+          }
           default:
             if (tk.tokens) body.push(new D.Paragraph({ children: inlineRuns(tk.tokens, {}, imgMap, D) }));
             else if (tk.text) body.push(new D.Paragraph({ children: [mkRun(decode(tk.text), {}, D)] }));

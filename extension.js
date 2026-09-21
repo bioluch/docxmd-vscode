@@ -4,8 +4,50 @@
 "use strict";
 const vscode = require("vscode");
 const path = require("path");
+const https = require("https");
 
 const VIEW_TYPE = "docxmd.editor";
+
+// ---- DeepL translation (performed in the host; the webview can't reach DeepL) ----
+let _deeplKey = null;
+async function getDeeplKey() {
+  if (_deeplKey) return _deeplKey;
+  const cfg = vscode.workspace.getConfiguration("docxmd").get("deeplApiKey");
+  if (cfg && String(cfg).trim()) { _deeplKey = String(cfg).trim(); return _deeplKey; }
+  const k = await vscode.window.showInputBox({
+    prompt: "Enter your DeepL API key (saved to settings: docxmd.deeplApiKey)",
+    password: true, ignoreFocusOut: true, placeHolder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+  });
+  if (k && k.trim()) {
+    _deeplKey = k.trim();
+    try { await vscode.workspace.getConfiguration("docxmd").update("deeplApiKey", _deeplKey, vscode.ConfigurationTarget.Global); } catch (e) {}
+    return _deeplKey;
+  }
+  return null;
+}
+function deeplRequest(texts, target, source, key) {
+  return new Promise((resolve, reject) => {
+    const host = /:fx$/.test(key) ? "api-free.deepl.com" : "api.deepl.com";
+    const body = { text: texts, target_lang: target };
+    if (source) body.source_lang = source;
+    const payload = JSON.stringify(body);
+    const req = https.request({
+      host: host, path: "/v2/translate", method: "POST",
+      headers: { "Authorization": "DeepL-Auth-Key " + key, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }
+    }, (res) => {
+      let d = ""; res.on("data", (c) => d += c); res.on("end", () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve((JSON.parse(d).translations || []).map((t) => t.text)); }
+          catch (e) { reject(new Error("Bad DeepL response")); }
+        } else {
+          let m = String(res.statusCode); try { m = JSON.parse(d).message || m; } catch (e) {}
+          const err = new Error("DeepL " + res.statusCode + ": " + m); err.status = res.statusCode; reject(err);
+        }
+      });
+    });
+    req.on("error", reject); req.write(payload); req.end();
+  });
+}
 let activePanel = null; // the most recently focused DOCXMD editor panel (for the export command)
 
 function activate(context) {
@@ -95,6 +137,29 @@ class DocxmdEditorProvider {
       else if (msg.type === "saveDocx") saveDocx(msg.dataBase64, msg.name);
       else if (msg.type === "info") vscode.window.showInformationMessage(msg.text);
       else if (msg.type === "error") vscode.window.showErrorMessage(msg.text);
+      else if (msg.type === "openExternal" && /^https:\/\//.test(msg.url || "")) vscode.env.openExternal(vscode.Uri.parse(msg.url));
+      else if (msg.type === "deepl") {
+        (async () => {
+          try {
+            const key = await getDeeplKey();
+            if (!key) { webview.postMessage({ type: "deeplResult", id: msg.id, error: "No DeepL API key set." }); return; }
+            const translations = await deeplRequest(msg.text, msg.target, msg.source, key);
+            webview.postMessage({ type: "deeplResult", id: msg.id, translations: translations });
+          } catch (e) {
+            if (e && (e.status === 401 || e.status === 403)) _deeplKey = null; // bad key → prompt again next time
+            webview.postMessage({ type: "deeplResult", id: msg.id, error: String(e && e.message || e) });
+          }
+        })();
+      }
+      else if (msg.type === "openTranslated") {
+        (async () => {
+          try {
+            const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: String(msg.text || "") });
+            await vscode.window.showTextDocument(doc, { preview: false });
+            vscode.window.showInformationMessage("Translated to " + String(msg.lang || "").toUpperCase() + " — review and save the new document. Use “DOCXMD: Open in DOCXMD Editor” for the live preview.");
+          } catch (e) { vscode.window.showErrorMessage("Open translated failed: " + e.message); }
+        })();
+      }
     });
 
     webviewPanel.onDidDispose(() => {
@@ -139,8 +204,22 @@ class DocxmdEditorProvider {
       <button class="tb" data-cmd="task">&#10003;</button>
       <button class="tb" data-cmd="link">🔗</button>
       <button class="tb" data-cmd="table">▦</button>
+      <span class="sep"></span>
+      <button class="tb" data-cmd="alignLeft" title="Align left"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
+      <button class="tb" data-cmd="alignCenter" title="Align center"><svg viewBox="0 0 24 24"><line x1="18" y1="10" x2="6" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="18" y1="18" x2="6" y2="18"/></svg></button>
+      <button class="tb" data-cmd="alignRight" title="Align right"><svg viewBox="0 0 24 24"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg></button>
+      <button class="tb" data-cmd="alignJustify" title="Justify"><svg viewBox="0 0 24 24"><line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/></svg></button>
     </div>
     <span class="spacer"></span>
+    <button class="tb" id="findBtn" title="Find & replace (Ctrl+F)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+    <button class="tb" id="helpBtn" title="Help &amp; guide (opens in browser)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
+    <select id="translate" class="sel" title="Translate document (DeepL)">
+      <option value="">🌐 Translate…</option>
+      <option value="en">English</option>
+      <option value="uk">Українська</option>
+      <option value="es">Español</option>
+      <option value="zh">中文</option>
+    </select>
     <select id="mode" class="sel" title="View">
       <option value="split">Split</option>
       <option value="source">Source</option>
@@ -154,15 +233,38 @@ class DocxmdEditorProvider {
     </select>
     <button class="btn" id="exportBtn">DOCX</button>
   </div>
+  <div class="findbar" id="findbar">
+    <input id="findInput" placeholder="Find" />
+    <input id="replaceInput" placeholder="Replace" />
+    <span class="count" id="findCount"></span>
+    <button class="tb" id="findPrev" title="Previous">&#8593;</button>
+    <button class="tb" id="findNext" title="Next">&#8595;</button>
+    <button class="tb ra" id="replaceAllBtn">Replace all</button>
+    <button class="tb" id="findClose">&#10005;</button>
+  </div>
   <div class="panes" id="panes">
-    <textarea id="source" spellcheck="true"></textarea>
+    <div class="pane-editor"><textarea id="source" spellcheck="true"></textarea></div>
     <div id="preview" class="markdown-body"></div>
+  </div>
+  <div class="statusbar" id="statusbar">
+    <span class="st"><b id="stWords">0</b>&nbsp;words</span>
+    <span class="st"><b id="stChars">0</b>&nbsp;chars</span>
+    <span class="st"><b id="stLines">0</b>&nbsp;lines</span>
+    <span class="st"><b id="stRead">0</b>&nbsp;min read</span>
+    <span class="spacer"></span>
+    <span class="st navjump">
+      <button class="navbtn" id="navTop" title="Go to start">&#10514;</button>
+      <span class="posbar" id="posbar"><span class="posfill" id="posfill"></span></span>
+      <button class="navbtn" id="navBottom" title="Go to end">&#10515;</button>
+      <b id="stPos">0%</b>
+    </span>
   </div>
   <script src="${v("vendor", "marked.min.js")}"></script>
   <script src="${v("vendor", "purify.min.js")}"></script>
   <script src="${v("vendor", "highlight.min.js")}"></script>
   <script src="${v("vendor", "docx.umd.js")}"></script>
   <script src="${v("md2docx.js")}"></script>
+  <script src="${v("translate.js")}"></script>
   <script src="${v("webview.js")}"></script>
 </body>
 </html>`;

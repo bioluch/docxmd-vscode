@@ -2,7 +2,7 @@
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
   "description": "Edit Markdown with a live neumorphic preview and export to Word (.docx), inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "docxmd",
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Other", "Formatters"],
@@ -15,6 +15,16 @@
   "main": "./extension.js",
   "icon": "media/icon.png",
   "contributes": {
+    "configuration": {
+      "title": "DOCXMD",
+      "properties": {
+        "docxmd.deeplApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Your personal DeepL API key, used to translate documents into the interface languages (EN · UK · ES · ZH). Stored locally in your VS Code settings and sent only to DeepL. Get a free key at https://www.deepl.com/pro-api."
+        }
+      }
+    },
     "customEditors": [
       {
         "viewType": "docxmd.editor",

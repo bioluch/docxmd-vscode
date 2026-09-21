@@ -4,6 +4,7 @@ html, body { height: 100%; }
 body {
   font-family: "Play", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg-base); color: var(--text-main);
+  height: 100vh; height: 100dvh;
   display: flex; flex-direction: column; overflow: hidden; line-height: 1.6;
 }
 ::selection { background: var(--sel); }
@@ -26,6 +27,8 @@ body {
 }
 .tb:hover { color: var(--accent); }
 .tb:active { box-shadow: inset 2px 2px 4px var(--shadow-dark); }
+.tb.active { color: var(--accent-contrast); background: var(--accent); }
+.tb svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; display: block; }
 .sel {
   background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-subtle);
   border-radius: 8px; padding: .35rem .5rem; font-family: inherit; font-size: .82rem; cursor: pointer;
@@ -40,20 +43,67 @@ body {
 .btn:disabled { opacity: .6; cursor: default; }
 
 /* Panes */
-.panes { display: flex; flex: 1 1 auto; min-height: 0; }
-#source {
-  flex: 1 1 50%; width: 100%; height: 100%; resize: none; border: none; outline: none;
-  background: var(--bg-base); color: var(--text-main); padding: 1.1rem 1.3rem;
-  font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
-  font-size: 14px; line-height: 1.7; tab-size: 4;
+.panes { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.pane-editor {
+  flex: 1 1 50%; min-width: 0; position: relative; display: flex;
+  background: var(--bg-base);
   box-shadow: inset 4px 4px 10px var(--shadow-dark), inset -4px -4px 10px var(--shadow-light);
 }
-#preview { flex: 1 1 50%; height: 100%; overflow: auto; padding: 1.2rem 1.6rem; }
+#source {
+  flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; resize: none; border: none; outline: none;
+  background: transparent; color: var(--text-main); padding: 1.1rem 1.3rem;
+  font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  font-size: 14px; line-height: 1.7; tab-size: 4;
+  position: relative; z-index: 1;
+}
+/* Find-highlight backdrop behind the transparent textarea (metrics mirrored in JS) */
+.find-backdrop {
+  position: absolute; top: 0; left: 0; z-index: 0; margin: 0; border: 0; overflow: hidden; pointer-events: none;
+  color: transparent; background: transparent; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+  font-family: ui-monospace, "Cascadia Code", Consolas, "Liberation Mono", monospace;
+}
+.find-backdrop mark { color: transparent; border-radius: 3px; padding: 0; }
+.find-backdrop mark.find-hit { background: var(--warning); }
+.find-backdrop mark.find-hit.find-current { background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+#preview { flex: 1 1 50%; min-width: 0; height: 100%; overflow: auto; padding: 1.2rem 1.6rem; }
 .mode-source #preview { display: none; }
-.mode-source #source { flex-basis: 100%; }
-.mode-preview #source { display: none; }
+.mode-source .pane-editor { flex-basis: 100%; }
+.mode-preview .pane-editor { display: none; }
 .mode-preview #preview { flex-basis: 100%; }
-@media (max-width: 700px) { .panes { flex-direction: column; } }
+.markdown-body mark.find-hit { background: var(--warning); color: #000; border-radius: 3px; padding: 0 1px; }
+.markdown-body mark.find-hit.find-current { background: var(--accent); color: var(--accent-contrast); box-shadow: 0 0 0 2px var(--accent); }
+/* Narrow / portrait: stack editor over preview so nothing is clipped */
+@media (max-width: 900px), (max-width: 1200px) and (orientation: portrait) {
+  .panes { flex-direction: column; }
+  .pane-editor, #preview { flex: 1 1 0 !important; width: 100% !important; max-width: 100% !important; height: auto !important; min-height: 0 !important; }
+  .mode-split #preview { border-top: 3px solid var(--accent); }
+}
+
+/* Find & replace bar */
+.findbar { display: none; align-items: center; gap: .4rem; flex: 0 0 auto; flex-wrap: wrap;
+  padding: .4rem .6rem; background: var(--bg-card); border-bottom: 1px solid var(--border-subtle); }
+.findbar.show { display: flex; }
+.findbar input { flex: 1 1 130px; max-width: 240px; background: var(--bg-base); color: var(--text-main);
+  border: 1px solid var(--border-subtle); border-radius: 8px; padding: .35rem .6rem; font-family: inherit; font-size: .85rem;
+  box-shadow: inset 2px 2px 4px var(--shadow-dark); }
+.findbar .count { font-size: .78rem; color: var(--text-muted); min-width: 54px; }
+.findbar .ra { width: auto; padding: 0 .6rem; font-size: .78rem; }
+
+/* Status bar */
+.statusbar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; flex: 0 0 auto;
+  padding: .35rem .8rem; background: var(--bg-card); border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted); font-size: .76rem; }
+.statusbar .st { display: inline-flex; align-items: center; gap: .3rem; }
+.statusbar .spacer { flex: 1 1 auto; }
+.statusbar #stPos { min-width: 34px; text-align: right; color: var(--text-main); }
+.navjump { gap: .4rem; }
+.navbtn { border: none; cursor: pointer; color: var(--text-muted); background: var(--bg-base); border-radius: 6px;
+  width: 22px; height: 22px; font-size: .85rem; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 2px 2px 5px var(--shadow-dark), -2px -2px 5px var(--shadow-light); }
+.navbtn:hover { color: var(--accent); }
+.posbar { position: relative; width: 110px; height: 6px; border-radius: 4px; cursor: pointer; background: var(--bg-base);
+  box-shadow: inset 1px 1px 3px var(--shadow-dark), inset -1px -1px 3px var(--shadow-light); }
+.posfill { position: absolute; left: 0; top: 0; height: 100%; width: 0; border-radius: 4px; background: var(--accent); pointer-events: none; transition: width .08s linear; }
 
 /* Markdown preview typography */
 .markdown-body { max-width: 900px; margin: 0 auto; word-wrap: break-word; }
