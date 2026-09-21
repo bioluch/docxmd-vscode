@@ -60,6 +60,55 @@
   }
 
   // ---- Inline runs -------------------------------------------------------
+  // ---- LaTeX → OMML (native Word math) ----------------------------------
+  const GREEK = { alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ", vartheta: "ϑ", iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", upsilon: "υ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ", omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω" };
+  const MOPS = { cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", approx: "≈", neq: "≠", ne: "≠", leq: "≤", le: "≤", geq: "≥", ge: "≥", ll: "≪", gg: "≫", rightarrow: "→", to: "→", leftarrow: "←", infty: "∞", ldots: "…", cdots: "⋯", dots: "…", equiv: "≡", sim: "∼", propto: "∝", partial: "∂", nabla: "∇", sum: "∑", prod: "∏", int: "∫", in: "∈", notin: "∉", cup: "∪", cap: "∩", forall: "∀", exists: "∃" };
+
+  function mathToOmml(D, tex) {
+    try { return new D.Math({ children: parseTex(D, String(tex)) }); }
+    catch (e) { return new D.Math({ children: [new D.MathRun(String(tex))] }); }
+  }
+  function parseTex(D, s) {
+    const out = []; let buf = "", i = 0;
+    const flushRest = (keepLast) => {
+      if (!buf) return null;
+      if (keepLast) { const last = buf.slice(-1), rest = buf.slice(0, -1); if (rest) out.push(new D.MathRun(rest)); buf = ""; return new D.MathRun(last); }
+      out.push(new D.MathRun(buf)); buf = ""; return null;
+    };
+    const readGroup = () => { let depth = 0; const start = i + 1; for (; i < s.length; i++) { if (s[i] === "{") depth++; else if (s[i] === "}") { depth--; if (!depth) { const inner = s.slice(start, i); i++; return inner; } } } return s.slice(start); };
+    const readArg = () => { while (i < s.length && s[i] === " ") i++; if (s[i] === "{") return readGroup(); if (s[i] === "\\") { let j = i + 1; while (j < s.length && /[a-zA-Z]/.test(s[j])) j++; const c = s.slice(i, j); i = j; return c; } const ch = s[i] || ""; i++; return ch; };
+    const scriptsFor = (baseChildren) => {
+      let sub = null, sup = null;
+      while (i < s.length && (s[i] === "_" || s[i] === "^")) { const isSup = s[i] === "^"; i++; const kids = parseTex(D, readArg()); if (isSup) sup = kids; else sub = kids; }
+      if (sub && sup) return new D.MathSubSuperScript({ children: baseChildren, subScript: sub, superScript: sup });
+      if (sub) return new D.MathSubScript({ children: baseChildren, subScript: sub });
+      if (sup) return new D.MathSuperScript({ children: baseChildren, superScript: sup });
+      return null;
+    };
+    while (i < s.length) {
+      const c = s[i];
+      if (c === "\\") {
+        let j = i + 1; while (j < s.length && /[a-zA-Z]/.test(s[j])) j++;
+        const cmd = s.slice(i + 1, j);
+        if (!cmd) { const nx = s[i + 1] || ""; i += 2; if (nx === "," || nx === ";" || nx === " " || nx === ":") buf += " "; else if (nx !== "!") buf += nx; continue; }
+        i = j;
+        if (cmd === "frac" || cmd === "dfrac" || cmd === "tfrac") { flushRest(); const n = readArg(), d = readArg(); const fr = new D.MathFraction({ numerator: parseTex(D, n), denominator: parseTex(D, d) }); const sc = scriptsFor([fr]); out.push(sc || fr); continue; }
+        if (cmd === "sqrt") { flushRest(); out.push(new D.MathRadical({ children: parseTex(D, readArg()) })); continue; }
+        if (cmd === "text" || cmd === "mathrm" || cmd === "mathbf" || cmd === "mathit" || cmd === "operatorname") { const t = readArg(); flushRest(); const run = new D.MathRun(t); const sc = scriptsFor([run]); out.push(sc || run); continue; }
+        if (["left", "right", "displaystyle", "textstyle", "scriptstyle", "limits", "nolimits", "big", "Big", "bigg", "Bigg", "quad", "qquad"].indexOf(cmd) !== -1) { if (cmd === "quad" || cmd === "qquad") buf += "  "; continue; }
+        if (MOPS[cmd] != null) { buf += MOPS[cmd]; continue; }
+        if (GREEK[cmd] != null) { buf += GREEK[cmd]; continue; }
+        buf += cmd; continue;
+      }
+      if (c === "{") { flushRest(); const gk = parseTex(D, readGroup()); const sc = scriptsFor(gk); if (sc) out.push(sc); else out.push.apply(out, gk); continue; }
+      if (c === "_" || c === "^") { let base = flushRest(true); if (!base) base = out.pop() || new D.MathRun(""); const sc = scriptsFor([base]); out.push(sc || base); continue; }
+      if (c === "$") { i++; continue; }
+      buf += c; i++;
+    }
+    flushRest();
+    return out.length ? out : [new D.MathRun("")];
+  }
+
   function inlineRuns(tokens, style, imgMap, D) {
     const runs = [];
     style = style || {};
@@ -103,6 +152,8 @@
           }
           break;
         }
+        case "mathInline":
+          runs.push(mathToOmml(D, tk.text)); break;
         case "html":
           // strip tags, keep any text
           { const txt = String(tk.text || "").replace(/<[^>]*>/g, ""); if (txt.trim()) runs.push(mkRun(decode(txt), style, D)); }
@@ -302,6 +353,13 @@
               children: inlineRuns(tk.tokens, {}, imgMap, D),
               alignment: mapAlign(curAlign(), D),
               spacing: { after: 120 }
+            }));
+            break;
+          case "mathBlock":
+            body.push(new D.Paragraph({
+              children: [mathToOmml(D, tk.text)],
+              alignment: D.AlignmentType.CENTER,
+              spacing: { before: 80, after: 120 }
             }));
             break;
           case "blockquote": {

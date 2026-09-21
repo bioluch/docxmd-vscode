@@ -15,6 +15,7 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - **Insert images** by pasting (`Ctrl+V`) or dragging a file onto the editor — embedded inline as a data-URI.
 - **Find & replace** (`Ctrl+F`) with every match highlighted in both the source and the preview.
 - **Status bar** with live word / character / line / reading-time counts, a scroll-position indicator and quick navigation (start / end / click-to-jump).
+- **LaTeX math** — inline `\(…\)` and display `\[…\]` / `$$…$$` formulas rendered with KaTeX (offline), and exported to Word as **native editable equations** (OMML).
 - **Translate documents** into the interface languages (English · Українська · Español · 中文) with DeepL.
 - **Help** button — opens the full illustrated guide in your browser.
 - 4 themes for the editor and preview.
@@ -56,6 +57,10 @@ Press `Ctrl+F` (or the 🔍 button) to open the find bar. Type a query and press
 ### Alignment & images
 
 Use the alignment buttons in the toolbar to wrap the current block in `<div align="…">` (left / center / right / justify). Paste an image from the clipboard with `Ctrl+V`, or drag an image file onto the editor — it is embedded inline as a data-URI, so the document stays self-contained.
+
+### LaTeX math
+
+Formulas render live with **KaTeX** (bundled, works offline). Use inline `\(…\)` and display `\[…\]` or `$$…$$`, e.g. `\[ E = mc^2 \]`.
 
 ### Translate
 

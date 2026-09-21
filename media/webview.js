@@ -17,11 +17,37 @@
 
   function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
 
+  // LaTeX math (KaTeX): catch \(…\) / \[…\] / $$…$$ with marked extensions and
+  // inject the rendered HTML after DOMPurify (trusted output).
+  let mathStore = [];
+  function mathPlaceholder(tex, display) {
+    if (!window.katex) return null;
+    let html;
+    try { html = katex.renderToString(String(tex).trim(), { displayMode: display, throwOnError: false, strict: false }); }
+    catch (e) { return null; }
+    const i = mathStore.length; mathStore.push(html);
+    return display ? '<div class="katex-ph" data-k="' + i + '"></div>' : '<span class="katex-ph" data-k="' + i + '"></span>';
+  }
+  if (window.marked && window.katex) {
+    marked.use({ extensions: [
+      { name: "mathBlock", level: "block",
+        start(src) { const m = src.match(/\\\[|\$\$/); return m ? m.index : undefined; },
+        tokenizer(src) { const m = /^\\\[([\s\S]+?)\\\]/.exec(src) || /^\$\$([\s\S]+?)\$\$/.exec(src); if (m) return { type: "mathBlock", raw: m[0], text: m[1] }; },
+        renderer(t) { const ph = mathPlaceholder(t.text, true); return ph != null ? ph : "<pre>" + escapeHtml(t.raw) + "</pre>"; } },
+      { name: "mathInline", level: "inline",
+        start(src) { const m = src.match(/\\\(/); return m ? m.index : undefined; },
+        tokenizer(src) { const m = /^\\\(([\s\S]+?)\\\)/.exec(src); if (m) return { type: "mathInline", raw: m[0], text: m[1] }; },
+        renderer(t) { const ph = mathPlaceholder(t.text, false); return ph != null ? ph : escapeHtml(t.raw); } }
+    ] });
+  }
+
   /* ---------- preview ---------- */
   function render() {
     let html;
+    mathStore = [];
     try { html = marked.parse(ta.value || ""); } catch (e) { html = "<p>" + escapeHtml(e.message || "") + "</p>"; }
-    preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align"], ADD_TAGS: ["input"] });
+    preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] });
+    if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     $$("li", preview).forEach((li) => {
       const i = li.querySelector('input[type="checkbox"]');
       if (i) { li.classList.add("task-list-item"); i.setAttribute("disabled", ""); }

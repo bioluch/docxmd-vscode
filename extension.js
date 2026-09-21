@@ -184,6 +184,7 @@ class DocxmdEditorProvider {
 <link rel="stylesheet" href="${v("themes.css")}" />
 <link id="hljsLight" rel="stylesheet" href="${v("vendor", "hljs-github.css")}" disabled />
 <link id="hljsDark" rel="stylesheet" href="${v("vendor", "hljs-github-dark.css")}" />
+<link rel="stylesheet" href="${v("vendor", "katex.min.css")}" />
 <link rel="stylesheet" href="${v("webview.css")}" />
 </head>
 <body>
@@ -265,6 +266,7 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "docx.umd.js")}"></script>
   <script src="${v("md2docx.js")}"></script>
   <script src="${v("translate.js")}"></script>
+  <script src="${v("vendor", "katex.min.js")}"></script>
   <script src="${v("webview.js")}"></script>
 </body>
 </html>`;
