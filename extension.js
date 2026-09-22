@@ -142,7 +142,17 @@ class DocxmdEditorProvider {
         (async () => {
           try {
             const key = await getDeeplKey();
-            if (!key) { webview.postMessage({ type: "deeplResult", id: msg.id, error: "No DeepL API key set." }); return; }
+            if (!key) {
+              webview.postMessage({ type: "deeplResult", id: msg.id, error: "No DeepL API key set." });
+              vscode.window.showWarningMessage(
+                "DOCXMD translation needs a DeepL API key (the on-device translator is not available in VS Code).",
+                "Get a free key", "Open Settings"
+              ).then((sel) => {
+                if (sel === "Get a free key") vscode.env.openExternal(vscode.Uri.parse("https://www.deepl.com/pro-api"));
+                else if (sel === "Open Settings") vscode.commands.executeCommand("workbench.action.openSettings", "docxmd.deeplApiKey");
+              });
+              return;
+            }
             const translations = await deeplRequest(msg.text, msg.target, msg.source, key);
             webview.postMessage({ type: "deeplResult", id: msg.id, translations: translations });
           } catch (e) {

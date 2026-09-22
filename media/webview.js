@@ -407,6 +407,10 @@
   async function exportDocx() {
     const md = ta.value;
     if (!md.trim()) { vscode.postMessage({ type: "error", text: "Document is empty — nothing to export." }); return; }
+    if (!window.MD2DOCX || typeof window.MD2DOCX.toBlob !== "function") {
+      vscode.postMessage({ type: "error", text: "DOCX engine failed to load. Reinstall the extension and run “Developer: Reload Window”." });
+      return;
+    }
     const btn = $("#exportBtn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
     try {
       const blob = await window.MD2DOCX.toBlob(md, {});
