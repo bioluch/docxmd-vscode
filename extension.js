@@ -10,20 +10,49 @@ const VIEW_TYPE = "docxmd.editor";
 
 // ---- DeepL translation (performed in the host; the webview can't reach DeepL) ----
 let _deeplKey = null;
+const KEY_PLACEHOLDER = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx";
+async function saveDeeplKey(k) {
+  _deeplKey = k;
+  try { await vscode.workspace.getConfiguration("docxmd").update("deeplApiKey", k, vscode.ConfigurationTarget.Global); } catch (e) {}
+}
 async function getDeeplKey() {
-  if (_deeplKey) return _deeplKey;
+  // Settings are the source of truth, so a key changed there is used right away.
   const cfg = vscode.workspace.getConfiguration("docxmd").get("deeplApiKey");
   if (cfg && String(cfg).trim()) { _deeplKey = String(cfg).trim(); return _deeplKey; }
+  if (_deeplKey) return _deeplKey;
   const k = await vscode.window.showInputBox({
     prompt: "Enter your DeepL API key (saved to settings: docxmd.deeplApiKey)",
-    password: true, ignoreFocusOut: true, placeHolder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx"
+    password: true, ignoreFocusOut: true, placeHolder: KEY_PLACEHOLDER
   });
-  if (k && k.trim()) {
-    _deeplKey = k.trim();
-    try { await vscode.workspace.getConfiguration("docxmd").update("deeplApiKey", _deeplKey, vscode.ConfigurationTarget.Global); } catch (e) {}
-    return _deeplKey;
-  }
+  if (k && k.trim()) { await saveDeeplKey(k.trim()); return _deeplKey; }
   return null;
+}
+// Quota exhausted (456) or key rejected (401/403): explain, and let the user enter
+// another key — the translation is then retried with it. One prompt at a time.
+let _keyPrompt = null;
+function askForAnotherKey(status) {
+  if (_keyPrompt) return _keyPrompt;
+  _keyPrompt = (async () => {
+    const why = status === 456
+      ? "DeepL: the monthly character quota of this API key is used up (HTTP 456)."
+      : "DeepL rejected this API key (HTTP " + status + ") — it is invalid, disabled or for another account.";
+    const pick = await vscode.window.showWarningMessage(why,
+      { modal: true, detail: "Enter another DeepL API key to continue translating. It replaces the saved key (setting docxmd.deeplApiKey). Free keys end with “:fx”." },
+      "Enter another key", "Open Settings", "DeepL account");
+    if (pick === "Enter another key") {
+      const k = await vscode.window.showInputBox({
+        prompt: "New DeepL API key (replaces the saved one)", password: true, ignoreFocusOut: true, placeHolder: KEY_PLACEHOLDER,
+        validateInput: (v) => (v && v.trim() ? null : "Paste a DeepL API key")
+      });
+      if (k && k.trim()) { await saveDeeplKey(k.trim()); return _deeplKey; }
+    } else if (pick === "Open Settings") {
+      vscode.commands.executeCommand("workbench.action.openSettings", "docxmd.deeplApiKey");
+    } else if (pick === "DeepL account") {
+      vscode.env.openExternal(vscode.Uri.parse("https://www.deepl.com/your-account/usage"));
+    }
+    return null;
+  })();
+  return _keyPrompt.finally(() => { _keyPrompt = null; });
 }
 function deeplRequest(texts, target, source, key) {
   return new Promise((resolve, reject) => {
@@ -93,6 +122,15 @@ function activate(context) {
       else vscode.window.showInformationMessage("Open a Markdown file first.");
     })
   );
+
+  // Enter / replace the DeepL API key at any time (e.g. after the quota is used up)
+  context.subscriptions.push(vscode.commands.registerCommand("docxmd.setDeeplKey", async () => {
+    const k = await vscode.window.showInputBox({
+      prompt: "DeepL API key for DOCXMD translation (saved to settings: docxmd.deeplApiKey)", password: true, ignoreFocusOut: true,
+      placeHolder: KEY_PLACEHOLDER, validateInput: (v) => (v && v.trim() ? null : "Paste a DeepL API key")
+    });
+    if (k && k.trim()) { await saveDeeplKey(k.trim()); vscode.window.showInformationMessage("DeepL API key saved."); }
+  }));
 
   // Import a Word document as Markdown (palette / explorer context on .docx)
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.importDocx", (uri) => importDocx(uri)));
@@ -193,10 +231,21 @@ class DocxmdEditorProvider {
               });
               return;
             }
-            const translations = await deeplRequest(msg.text, msg.target, msg.source, key);
+            let useKey = key, translations = null;
+            for (let attempt = 0; ; attempt++) {
+              try { translations = await deeplRequest(msg.text, msg.target, msg.source, useKey); break; }
+              catch (e) {
+                const st = e && e.status;
+                if (!(st === 456 || st === 401 || st === 403) || attempt >= 3) throw e;
+                if (useKey !== _deeplKey && _deeplKey) { useKey = _deeplKey; continue; } // another chunk already got a new key
+                const next = await askForAnotherKey(st);
+                // cancelled: the webview stays quiet (the dialog already explained it)
+                if (!next) { webview.postMessage({ type: "deeplResult", id: msg.id, error: "No DeepL API key set (" + st + ")." }); return; }
+                useKey = next;
+              }
+            }
             webview.postMessage({ type: "deeplResult", id: msg.id, translations: translations });
           } catch (e) {
-            if (e && (e.status === 401 || e.status === 403)) _deeplKey = null; // bad key → prompt again next time
             webview.postMessage({ type: "deeplResult", id: msg.id, error: String(e && e.message || e) });
           }
         })();

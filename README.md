@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.1.10:** when the DeepL quota is used up (or the key is rejected) a dialog lets you **enter another API key** and the translation continues; new command **DOCXMD: Set DeepL API key**.
+>
 > **Fixed in 0.1.9:** translating a document asks for your DeepL API key again (0.1.7–0.1.8 showed *“Translate failed: Failed to fetch”* instead).
 >
 > **New in 0.1.8:** **footnotes**, **numbered figures & tables with cross-references**, **table of contents** and **numbered headings**; **callout blocks** `:::warning Title` and GitHub alerts `> [!NOTE]`, **x² / x₂** buttons (`Ctrl+.` / `Ctrl+,`), a **Ω symbols panel** (Greek, operators, arrows, indices, units; optional LaTeX), and **nicer tables** (numeric columns right-aligned, sticky header, zebra, `:::table-compact` / `:::table-full`). See [What's new in 0.1.8](#whats-new-in-018).
@@ -100,11 +102,17 @@ Formulas render live with **KaTeX** (bundled, works offline). Use inline `\(…\
 
 Pick a target language from the **🌐 Translate…** menu in the toolbar (English · Українська · Español · 中文). The translation preserves the Markdown structure, tables, links and code, and opens as a new untitled document.
 
-Translation uses **DeepL** and requires your own API key. On first use you will be asked for it; it is stored in the `docxmd.deeplApiKey` setting and sent only to DeepL. Get a free key at <https://www.deepl.com/pro-api>.
+Translation uses **DeepL** and requires your own API key. On first use you will be asked for it; it is stored in the `docxmd.deeplApiKey` setting and sent only to DeepL. If the key's monthly quota is used up (or the key is rejected), a dialog lets you enter another key and the translation continues; you can also run **DOCXMD: Set DeepL API key** at any time. Get a free key at <https://www.deepl.com/pro-api>.
 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.10
+
+- **DeepL quota / invalid key:** instead of *“Translate failed: DeepL 456: Quota exceeded”* a dialog explains the problem and offers **Enter another key** (the translation is retried with it and the key is saved), **Open Settings** or **DeepL account** (usage page). The same dialog appears when DeepL rejects the key (HTTP 401/403).
+- **New command:** `DOCXMD: Set DeepL API key` — replace the saved key at any time.
+- A key changed in *Settings → docxmd.deeplApiKey* is used immediately (no reload needed).
 
 ## What's new in 0.1.9
 
