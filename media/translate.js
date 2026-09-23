@@ -104,6 +104,16 @@
     const CH = 40, res = [];
     for (let i = 0; i < texts.length; i += CH) {
       const chunk = texts.slice(i, i + CH);
+      // VS Code webview: the extension host performs the DeepL call (a webview can't
+      // reach DeepL or api/translate) and asks for the API key when none is saved.
+      // The PWA never defines __deeplTransport, so it keeps using its proxy.
+      // Keep this hook: the extension ships a verbatim copy of this file.
+      if (global.__deeplTransport) {
+        const arr2 = await global.__deeplTransport(chunk, DEEPL[target], source ? DEEPL[source] : undefined);
+        arr2.forEach((t) => res.push(typeof t === "string" ? t : t.text));
+        if (onProgress) onProgress((i + chunk.length) / texts.length);
+        continue;
+      }
       const r = await fetch("api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -150,7 +150,8 @@
       const out = await MDTranslate.run(md, { target: target, provider: "deepl" });
       vscode.postMessage({ type: "openTranslated", text: out, lang: target });
     } catch (e) {
-      vscode.postMessage({ type: "error", text: "Translate failed: " + (e && e.message) });
+      // No key (prompt cancelled): the host already shows a warning with "Get a free key" / "Open Settings"
+      if (!/No DeepL API key/i.test(String(e && e.message))) vscode.postMessage({ type: "error", text: "Translate failed: " + (e && e.message) });
     } finally { tlSel.disabled = false; }
   });
 

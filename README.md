@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **Fixed in 0.1.9:** translating a document asks for your DeepL API key again (0.1.7–0.1.8 showed *“Translate failed: Failed to fetch”* instead).
+>
 > **New in 0.1.8:** **footnotes**, **numbered figures & tables with cross-references**, **table of contents** and **numbered headings**; **callout blocks** `:::warning Title` and GitHub alerts `> [!NOTE]`, **x² / x₂** buttons (`Ctrl+.` / `Ctrl+,`), a **Ω symbols panel** (Greek, operators, arrows, indices, units; optional LaTeX), and **nicer tables** (numeric columns right-aligned, sticky header, zebra, `:::table-compact` / `:::table-full`). See [What's new in 0.1.8](#whats-new-in-018).
 >
 > **New in 0.1.7:** import Word (`.docx`) → Markdown with **table colours & alignment**, **colour boxes** `:::red … :::`, inline math `$…$`, superscript/subscript citations, coloured table cells and full-fidelity quotes in DOCX export. See [What's new in 0.1.7](#whats-new-in-017).
@@ -103,6 +105,10 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.9
+
+- **Fix — translation:** choosing a language in **🌐 Translate…** again opens the prompt for your DeepL API key (and then translates through the extension host). In 0.1.7–0.1.8 the webview tried to call DeepL directly and failed with *“Translate failed: Failed to fetch”*. If you close the prompt without a key, a single warning offers **Get a free key** / **Open Settings**.
 
 ## What's new in 0.1.8
 
