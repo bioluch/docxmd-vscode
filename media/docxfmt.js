@@ -66,6 +66,7 @@
   }
 
   const DEFAULT_HEAD_FILL = "#F0F0F0";
+  const DEFAULT_ZEBRA_FILL = "#F7F7F7"; // DOCXMD's zebra rows in plain tables
   // quote-bar colours that mean "a plain > quote": the old grey + the theme accents
   const PLAIN_BARS = ["#BBBBBB", "#007BFF", "#64FFDA", "#28A745", "#0984E3"];
   const JC = { center: "center", right: "right", end: "right", both: "justify", distribute: "justify", left: "left", start: "left" };
@@ -121,7 +122,12 @@
       for (const tbl of Array.from(doc.getElementsByTagNameNS(W, "tbl"))) {
         if (isQuoteTable(tbl)) {
           const c = hex(wval(kid(kid(kid(tbl, "tblPr"), "tblBorders"), "left"), "color"));
-          tables.push({ quote: true, color: c && !PLAIN_BARS.includes(c) ? c : null });
+          const tc = kid(kid(tbl, "tr"), "tc");
+          const fill = hex(wval(kid(kid(tc, "tcPr"), "shd"), "fill"));
+          // a filled quote whose bar is a callout colour → :::callout
+          const M = global.MD2DOCX;
+          const kind = fill && c && M && M.calloutByColor ? M.calloutByColor(c) : null;
+          tables.push({ quote: true, callout: kind, color: kind ? null : (c && !PLAIN_BARS.includes(c) ? c : null) });
           continue;
         }
         const tblFill = hex(wval(kid(kid(tbl, "tblPr"), "shd"), "fill"));
@@ -131,7 +137,7 @@
           .map((tc) => {
             const f = cellFmt(tc, tblFill);
             // the light-grey header fill is DOCXMD's own default for plain tables
-            if (ri === 0 && f.fill === DEFAULT_HEAD_FILL) { delete f.fill; if (f.autoColor) delete f.color; }
+            if ((ri === 0 && f.fill === DEFAULT_HEAD_FILL) || (ri > 0 && f.fill === DEFAULT_ZEBRA_FILL)) { delete f.fill; if (f.autoColor) delete f.color; }
             delete f.autoColor;
             return f;
           }));
@@ -154,7 +160,8 @@
     return s.join(";");
   }
 
-  function apply(html, fmt) {
+  function apply(html, fmt) { return structure(applyTables(html, fmt)); }
+  function applyTables(html, fmt) {
     if (!fmt || !fmt.tables || !fmt.tables.length) return html;
     const tpl = document.createElement("template");
     tpl.innerHTML = html;
@@ -162,7 +169,10 @@
     if (tables.length !== fmt.tables.length) return html; // can't pair them up safely
     tables.forEach((table, ti) => {
       const tf = fmt.tables[ti];
-      if (tf.quote) { table.setAttribute("data-docxmd-quote", tf.color || "1"); return; }
+      if (tf.quote) {
+        table.setAttribute("data-docxmd-quote", tf.callout ? "callout:" + tf.callout : (tf.color || "1"));
+        return;
+      }
       const rows = Array.from(table.rows);
       let rich = !isHeadingRow(rows[0]);
       const colAlign = [];
@@ -225,9 +235,120 @@
     return out.join("\n");
   }
 
+
+  // ---- document structure written by DOCXMD's DOCX export ---------------
+  // Bookmarks/links from md2docx become Markdown again: footnotes → [^n],
+  // figure/table captions → {#fig:id} / Table: … {#tbl:id}, links → @fig:id,
+  // heading bookmarks → {#sec:id}, TOC → [TOC], numbered headings → directive.
+  const unBookmark = (name, kind) => name.slice(kind.length + 1).replace(/__/g, "-");
+  const LABEL_RE = /^\s*(?:Figure|Рисунок|Figura|图|Table|Таблиця|Tabla|表)\s*\d+\s*$/;
+  function stripLabel(p) {
+    // "<strong>Рисунок 1</strong> — caption" → "caption"
+    const first = p.firstElementChild;
+    if (first && /^(STRONG|B)$/.test(first.nodeName) && LABEL_RE.test(first.textContent) && (!first.previousSibling || !first.previousSibling.textContent.trim())) {
+      first.remove();
+      const t = p.firstChild;
+      if (t && t.nodeType === 3) t.nodeValue = t.nodeValue.replace(/^\s*[—–-]\s*/, "");
+    }
+  }
+  function structure(html) {
+    if (typeof document === "undefined") return html;
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const root = tpl.content;
+    const marker = (attr, text) => { const m = document.createElement("p"); m.setAttribute(attr, "1"); m.textContent = text; return m; };
+    // numbered headings
+    const num = root.querySelector('a[id="docxmd_numbered"]');
+    if (num) {
+      num.remove();
+      root.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
+        const w = document.createTreeWalker(h, 4); const t = w.nextNode();
+        if (t) t.nodeValue = t.nodeValue.replace(/^\s*\d+(?:\.\d+)*\s+/, "");
+      });
+      root.insertBefore(marker("data-docxmd-numbered", "numbered"), root.firstChild);
+    }
+    // table of contents (+ entries of a TOC field Word has already updated)
+    root.querySelectorAll('a[id="docxmd_toc"]').forEach((a) => {
+      const p = a.closest("p") || a.parentElement;
+      const m = marker("data-docxmd-toc", "TOC");
+      p.replaceWith(m);
+      let n = m.nextElementSibling;
+      while (n && n.nodeName === "P") {
+        const links = Array.from(n.querySelectorAll("a[href]"));
+        if (!links.length || links.some((x) => !/^#_Toc/.test(x.getAttribute("href")))) break;
+        const next = n.nextElementSibling; n.remove(); n = next;
+      }
+    });
+    // section anchors in headings
+    root.querySelectorAll('h1 a[id^="sec_"],h2 a[id^="sec_"],h3 a[id^="sec_"],h4 a[id^="sec_"],h5 a[id^="sec_"],h6 a[id^="sec_"]').forEach((a) => {
+      const h = a.closest("h1,h2,h3,h4,h5,h6");
+      h.setAttribute("data-docxmd-sec", unBookmark(a.id, "sec")); a.remove();
+    });
+    // figure captions: the image paragraph just before the caption
+    root.querySelectorAll('a[id^="fig_"]').forEach((a) => {
+      const cap = a.closest("p"); if (!cap) return;
+      const id = unBookmark(a.id, "fig"); a.remove(); stripLabel(cap);
+      const prev = cap.previousElementSibling;
+      const img = prev && prev.nodeName === "P" && prev.querySelectorAll("img").length === 1 && !prev.textContent.trim() ? prev.querySelector("img") : null;
+      if (!img) return;
+      const f = document.createElement("p");
+      f.setAttribute("data-docxmd-fig", id); f.setAttribute("data-src", img.getAttribute("src") || "");
+      f.innerHTML = cap.innerHTML || "&#8203;";
+      prev.remove(); cap.replaceWith(f);
+    });
+    // table captions
+    root.querySelectorAll('a[id^="tbl_"]').forEach((a) => {
+      const cap = a.closest("p"); if (!cap) return;
+      const id = unBookmark(a.id, "tbl"); a.remove(); stripLabel(cap);
+      cap.setAttribute("data-docxmd-tblcap", id);
+      if (!cap.textContent.trim()) cap.innerHTML = "&#8203;";
+    });
+    // footnotes / endnotes: drop back-links and the duplicates mammoth adds for repeated references
+    root.querySelectorAll('a[href^="#footnote-ref-"],a[href^="#endnote-ref-"]').forEach((a) => a.remove());
+    root.querySelectorAll("ol").forEach((ol) => {
+      const lis = Array.from(ol.children);
+      if (!lis.length || !lis.every((li) => /^(footnote|endnote)-\d+$/.test(li.id))) return;
+      const seen = {};
+      lis.forEach((li) => { if (seen[li.id]) li.remove(); else seen[li.id] = 1; });
+      ol.setAttribute("data-docxmd-fn", "1");
+    });
+    return tpl.innerHTML;
+  }
+  const noteId = (href) => { const m = /#(footnote|endnote)-(\d+)$/.exec(href || ""); return m ? (m[1] === "endnote" ? "e" : "") + m[2] : null; };
+  function structureRules(td) {
+    td.addRule("docxmdNumbered", { filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-numbered"), replacement: () => "\n\n<!-- docxmd: numbered-headings -->\n\n" });
+    td.addRule("docxmdToc", { filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-toc"), replacement: () => "\n\n[TOC]\n\n" });
+    td.addRule("docxmdSecHeading", {
+      filter: (n) => /^H[1-6]$/.test(n.nodeName) && n.hasAttribute("data-docxmd-sec"),
+      replacement: (content, n) => "\n\n" + "#".repeat(+n.nodeName[1]) + " " + content.trim() + " {#sec:" + n.getAttribute("data-docxmd-sec") + "}\n\n"
+    });
+    td.addRule("docxmdFigure", {
+      filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-fig"),
+      replacement: (content, n) => "\n\n![" + content.replace(/​/g, "").trim() + "](" + n.getAttribute("data-src") + "){#fig:" + n.getAttribute("data-docxmd-fig") + "}\n\n"
+    });
+    td.addRule("docxmdTableCaption", {
+      filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-tblcap"),
+      replacement: (content, n) => "\n\nTable: " + content.replace(/​/g, "").trim() + " {#tbl:" + n.getAttribute("data-docxmd-tblcap") + "}\n\n"
+    });
+    td.addRule("docxmdXref", {
+      filter: (n) => n.nodeName === "A" && /^#(fig|tbl|sec)_/.test(n.getAttribute("href") || ""),
+      replacement: (content, n) => { const h = n.getAttribute("href").slice(1), k = h.slice(0, 3); return "@" + k + ":" + unBookmark(h, k); }
+    });
+    td.addRule("docxmdNoteRef", {
+      filter: (n) => n.nodeName === "SUP" && n.children.length === 1 && n.firstElementChild.nodeName === "A" && noteId(n.firstElementChild.getAttribute("href")) != null,
+      replacement: (content, n) => "[^" + noteId(n.firstElementChild.getAttribute("href")) + "]"
+    });
+    td.addRule("docxmdNotes", {
+      filter: (n) => n.nodeName === "OL" && n.hasAttribute("data-docxmd-fn"),
+      replacement: (content, n) => "\n\n" + Array.from(n.children).map((li) =>
+        "[^" + noteId("#" + li.id) + "]: " + td.turndown(li.innerHTML).replace(/\s*\n+\s*/g, " ").trim()).join("\n") + "\n\n"
+    });
+  }
+
   // Turndown rules: styled tables → HTML block; exported quote tables → blockquote.
   // addRule() puts them in front of the GFM plugin's table rule.
   function tableRule(td) {
+    structureRules(td);
     td.addRule("docxmdHtmlTable", {
       filter: (n) => n.nodeName === "TABLE" && n.getAttribute("data-docxmd-html") === "1",
       replacement: (content, node) => "\n\n" + tableHtml(node) + "\n\n"
@@ -240,6 +361,24 @@
         const quote = md.trim().split("\n").map((l) => (l ? "> " + l : ">")).join("\n");
         const c = node.getAttribute("data-docxmd-quote");
         if (c === "1") return "\n\n" + quote + "\n\n";
+        if (c.indexOf("callout:") === 0) {
+          // first bold line = "icon Title"; a default title is dropped (it is implied by the type)
+          const kind = c.slice(8);
+          const lines = md.trim().split("\n");
+          let title = "";
+          const m = /^\*\*(.+)\*\*$/.exec(lines[0] || "");
+          if (m) {
+            const M = global.MD2DOCX;
+            const icon = M && M.CALLOUTS && M.CALLOUTS[kind] ? M.CALLOUTS[kind].icon : "";
+            title = m[1].trim();
+            if (icon && title.indexOf(icon) === 0) title = title.slice(icon.length);
+            title = title.replace(/^[\uFE0F\u200D\s]+/, "").trim();
+            lines.shift();
+            while (lines.length && !lines[0].trim()) lines.shift();
+            if (M && M.isDefaultCalloutTitle && M.isDefaultCalloutTitle(kind, title)) title = "";
+          }
+          return "\n\n:::" + kind + (title ? " " + title : "") + "\n" + lines.join("\n") + "\n:::\n\n";
+        }
         // coloured bar → :::colour box (named when it matches the palette)
         const name = global.MD2DOCX && MD2DOCX.colorName ? MD2DOCX.colorName(c) : c;
         return "\n\n:::" + name + "\n" + quote + "\n:::\n\n";
@@ -247,5 +386,5 @@
     });
   }
 
-  global.DOCXFMT = { extract, apply, tableRule, readZipEntry };
+  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry };
 })(typeof window !== "undefined" ? window : this);

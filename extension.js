@@ -243,12 +243,16 @@ class DocxmdEditorProvider {
       <button class="tb" data-cmd="bold"><b>B</b></button>
       <button class="tb" data-cmd="italic"><i>I</i></button>
       <button class="tb" data-cmd="strike"><s>S</s></button>
+      <button class="tb" data-cmd="sup" title="Superscript (Ctrl+.)">x<sup>2</sup></button>
+      <button class="tb" data-cmd="sub" title="Subscript (Ctrl+,)">x<sub>2</sub></button>
+      <button class="tb" data-cmd="symbols" title="Symbols">&Omega;</button>
       <span class="sep"></span>
       <button class="tb" data-cmd="h1">H1</button>
       <button class="tb" data-cmd="h2">H2</button>
       <button class="tb" data-cmd="h3">H3</button>
       <span class="sep"></span>
       <button class="tb" data-cmd="quote">&#8220;</button>
+      <button class="tb" data-cmd="callout" title="Callout block"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4z"/><line x1="12" y1="8" x2="12" y2="10.5"/><line x1="12" y1="13" x2="12.01" y2="13"/></svg></button>
       <button class="tb" data-cmd="code">&lt;/&gt;</button>
       <button class="tb" data-cmd="ul">&#8226;</button>
       <button class="tb" data-cmd="ol">1.</button>

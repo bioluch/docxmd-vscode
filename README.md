@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.1.8:** **footnotes**, **numbered figures & tables with cross-references**, **table of contents** and **numbered headings**; **callout blocks** `:::warning Title` and GitHub alerts `> [!NOTE]`, **x² / x₂** buttons (`Ctrl+.` / `Ctrl+,`), a **Ω symbols panel** (Greek, operators, arrows, indices, units; optional LaTeX), and **nicer tables** (numeric columns right-aligned, sticky header, zebra, `:::table-compact` / `:::table-full`). See [What's new in 0.1.8](#whats-new-in-018).
+>
 > **New in 0.1.7:** import Word (`.docx`) → Markdown with **table colours & alignment**, **colour boxes** `:::red … :::`, inline math `$…$`, superscript/subscript citations, coloured table cells and full-fidelity quotes in DOCX export. See [What's new in 0.1.7](#whats-new-in-017).
 
 DOCXMD provides a dedicated Markdown editor with live preview, formatting tools, multiple themes, and direct Word document export.
@@ -101,6 +103,19 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.8
+
+- **Callout blocks** — `:::info`, `:::note`, `:::tip`, `:::success`, `:::important`, `:::warning`, `:::danger` with an optional title on the opening line (`:::warning Measurement conditions`). GitHub/Obsidian alerts `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]` render the same way. In Word a callout is a tinted box with a coloured bar and a bold title with its icon; importing that `.docx` gives `:::type` back. `:::quote-red` etc. are aliases of the colour boxes.
+- **x² / x₂ toolbar buttons** (`Ctrl+.` / `Ctrl+,`) wrap the selection in `<sup>` / `<sub>`; pressing again removes it, and a subscript can be switched to a superscript.
+- **Ω symbols panel** — Greek letters, operators, arrows & logic, Unicode indices and units, with *Recent* symbols and an *Insert as LaTeX* option (`\delta`) for use inside `$…$`.
+- **Callout button** in the toolbar wraps the selected lines in `:::type … :::`.
+- **Footnotes** `text[^1]` + `[^1]: note` — numbered in order of use, listed at the end of the preview, **real Word footnotes** in DOCX.
+- **Numbered figures and tables with cross-references** (pandoc-crossref syntax): `![Caption](img.png){#fig:id width=60%}`, `Table: Caption {#tbl:id}`, `## Heading {#sec:id}`, and `@fig:id` / `@tbl:id` / `@sec:id` links that always show the current number. In DOCX: captions with bookmarks and internal hyperlinks.
+- **Table of contents** `[TOC]` (Word TOC field in DOCX) and **numbered headings** via `<!-- docxmd: numbered-headings -->` (1, 1.1, 1.1.1).
+- Importing a `.docx` made by DOCXMD restores footnotes, captions, references, `[TOC]` and the numbering directive.
+- Embedded data-URI images are shown on a tinted band in the editor.
+- **Tables** — rounded frame, zebra rows, row hover, sticky header; columns whose cells are all numbers (units, ranges, `<`/`≥` allowed) are right-aligned in the preview **and** in DOCX; `:::table-compact` (tighter, smaller text) and `:::table-full` (full width) wrappers. In Word: grey header, zebra rows, header repeated on every page.
 
 ## What's new in 0.1.7
 

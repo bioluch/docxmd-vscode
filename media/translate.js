@@ -24,6 +24,10 @@
     s = s.replace(/<[^>\s][^>]*>/g, push);                 // html tags
     s = s.replace(/(?:https?|mailto):\/?\/?\S+/g, push);   // bare URLs
     s = s.replace(/\$[^$\n]+\$/g, push);                   // inline math
+    s = s.replace(/\[\^[^\]\s]+\]:?/g, push);              // footnote refs / definitions
+    s = s.replace(/\{#[a-z]+:[^}\n]*\}/g, push);            // {#fig:id} {#tbl:id} {#sec:id}
+    s = s.replace(/\[?@(?:fig|tbl|sec):[A-Za-z0-9_-]+\]?/g, push); // cross-references
+    s = s.replace(/^\[TOC\]$/gi, push);                     // table of contents
     return { s, store };
   }
   // Split a string into ordered chunks LOCALLY: { text } is prose to translate,

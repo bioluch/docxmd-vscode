@@ -43,8 +43,31 @@
         renderer(t) { const ph = mathPlaceholder(t.text, false); return ph != null ? ph : escapeHtml(t.raw); } }
     ] });
   }
-  // :::red … ::: colour boxes (shared definition in md2docx.js)
-  if (window.marked && window.MD2DOCX && MD2DOCX.colorBoxExtension) marked.use({ extensions: [MD2DOCX.colorBoxExtension()] });
+  // Shared Markdown extensions + numbering hooks (md2docx.js): boxes, callouts, alerts,
+  // :::table-*, footnotes, figure/table captions, @refs, [TOC], numbered headings
+  if (window.marked && window.MD2DOCX && MD2DOCX.markedConfig) marked.use(MD2DOCX.markedConfig());
+
+  // Tables: right-align all-numeric columns without explicit alignment (same rule as DOCX)
+  function enhanceTables(root) {
+    $$("table", root).forEach((tb) => {
+      const merged = $$("th,td", tb).some((c) => c.colSpan > 1 || c.rowSpan > 1);
+      const head = tb.tHead && tb.tHead.rows[0];
+      const rows = Array.from(tb.tBodies).flatMap((b) => Array.from(b.rows));
+      if (head && rows.length && !merged && window.MD2DOCX && MD2DOCX.isNumericCell) {
+        const explicit = (c) => c.getAttribute("align") || (c.style && c.style.textAlign);
+        Array.from(head.cells).forEach((hc, i) => {
+          if (explicit(hc)) return;
+          if (rows.every((r) => r.cells[i] && !explicit(r.cells[i]) && MD2DOCX.isNumericCell(r.cells[i].textContent))) {
+            hc.classList.add("num"); rows.forEach((r) => r.cells[i].classList.add("num"));
+          }
+        });
+      }
+      if (!tb.parentElement.classList.contains("tbl-wrap")) {
+        const w = document.createElement("div"); w.className = "tbl-wrap"; tb.parentNode.insertBefore(w, tb); w.appendChild(tb);
+      }
+    });
+    requestAnimationFrame(() => $$(".tbl-wrap", root).forEach((w) => w.classList.toggle("scroll", w.scrollWidth > w.clientWidth + 1)));
+  }
 
   /* ---------- preview ---------- */
   function render() {
@@ -53,6 +76,8 @@
     try { html = marked.parse(ta.value || ""); } catch (e) { html = "<p>" + escapeHtml(e.message || "") + "</p>"; }
     preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] });
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
+    enhanceTables(preview);
+    $$("h1,h2,h3,h4,h5,h6", preview).forEach((h, i) => { if (!h.id) h.id = "h-" + i; });
     $$("li", preview).forEach((li) => {
       const i = li.querySelector('input[type="checkbox"]');
       if (i) { li.classList.add("task-list-item"); i.setAttribute("disabled", ""); }
@@ -66,8 +91,16 @@
       try { hljs.highlightElement(c); } catch (e) {}
     });
     updateStats();
-    if (findState.active) runFind(false);
+    if (findState.active) runFind(false); else schedulePaint();
   }
+
+  // Internal links (TOC, @refs, footnotes) scroll inside the preview
+  preview.addEventListener("click", (e) => {
+    const a = e.target.closest('a[href^="#"]'); if (!a) return;
+    const t = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+    if (!t || !preview.contains(t)) return;
+    e.preventDefault(); t.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 
   /* ---------- sync with the VS Code document ---------- */
   function pushEdit() {
@@ -161,7 +194,87 @@
     const out = (kind === "left" || existing === kind) ? inner : '<div align="' + kind + '">\n\n' + inner + '\n\n</div>';
     ta.focus(); ta.setSelectionRange(s, e); replaceSel(out);
   }
+  // x² / x₂: wrap in <sup>/<sub>; again → unwrap; the other tag → switch
+  function toggleTag(tag) {
+    const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd, sel = v.slice(s, e);
+    const open = "<" + tag + ">", close = "</" + tag + ">";
+    const other = tag === "sup" ? "sub" : "sup";
+    const inner = (x, o, c) => x.length >= o.length + c.length && x.startsWith(o) && x.endsWith(c) ? x.slice(o.length, x.length - c.length) : null;
+    let t = inner(sel, open, close);
+    if (t != null) { replaceSel(t); return; }
+    if (v.slice(s - open.length, s) === open && v.slice(e, e + close.length) === close) {
+      ta.setSelectionRange(s - open.length, e + close.length); replaceSel(sel); return;
+    }
+    t = inner(sel, "<" + other + ">", "</" + other + ">");
+    if (t != null) { replaceSel(open + t + close); return; }
+    wrap(open, close, "2");
+  }
+
+  /* ---------- popovers: symbols (Ω) and callout menu ---------- */
+  let popEl = null;
+  const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+  const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function closePop() { if (popEl) { popEl.remove(); popEl = null; document.removeEventListener("mousedown", onOutside, true); } }
+  function onOutside(e) { if (popEl && !popEl.contains(e.target) && !e.target.closest('[data-cmd="symbols"],[data-cmd="callout"]')) closePop(); }
+  function openPop(cmd, html, onPick) {
+    const same = popEl && popEl.dataset.cmd === cmd;
+    closePop(); if (same) return;
+    const btn = $('[data-cmd="' + cmd + '"]');
+    popEl = document.createElement("div"); popEl.className = "popover"; popEl.dataset.cmd = cmd; popEl.innerHTML = html;
+    document.body.appendChild(popEl);
+    const r = btn.getBoundingClientRect();
+    popEl.style.top = (r.bottom + 6) + "px";
+    popEl.style.left = Math.max(8, Math.min(r.left, window.innerWidth - popEl.offsetWidth - 8)) + "px";
+    popEl.addEventListener("mousedown", (e) => { if (!e.target.closest("input")) e.preventDefault(); });
+    popEl.addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) onPick(b.dataset.pick); });
+    document.addEventListener("mousedown", onOutside, true);
+  }
+  const SYM_GROUPS = [["Greek", "α β γ δ ε θ λ μ π ρ σ τ φ ω Δ Σ Ω"], ["Operators", "± × ÷ · ≈ ≠ ≤ ≥ ∞ √ ∑ ∏ ∫ ∂ ∇ ∝ °"],
+    ["Arrows & logic", "→ ← ↔ ⇒ ⇔ ↑ ↓ ∈ ∉ ⊂ ∪ ∩ ∀ ∃"], ["Indices", "⁰ ¹ ² ³ ⁴ ⁵ ⁶ ⁷ ⁸ ⁹ ₀ ₁ ₂ ₃ ₄ ₅ ₆ ₇ ₈ ₉"], ["Units", "°C µm µg mmHg ‰ Ω"]];
+  const SYM_TEX = { "α": "\\alpha", "β": "\\beta", "γ": "\\gamma", "δ": "\\delta", "ε": "\\varepsilon", "θ": "\\theta", "λ": "\\lambda",
+    "μ": "\\mu", "π": "\\pi", "ρ": "\\rho", "σ": "\\sigma", "τ": "\\tau", "φ": "\\varphi", "ω": "\\omega", "Δ": "\\Delta", "Σ": "\\Sigma",
+    "Ω": "\\Omega", "±": "\\pm", "×": "\\times", "÷": "\\div", "·": "\\cdot", "≈": "\\approx", "≠": "\\neq", "≤": "\\leq", "≥": "\\geq",
+    "∞": "\\infty", "√": "\\sqrt{}", "∑": "\\sum", "∏": "\\prod", "∫": "\\int", "∂": "\\partial", "∇": "\\nabla", "∝": "\\propto",
+    "°": "^\\circ", "→": "\\rightarrow", "←": "\\leftarrow", "↔": "\\leftrightarrow", "⇒": "\\Rightarrow", "⇔": "\\Leftrightarrow",
+    "↑": "\\uparrow", "↓": "\\downarrow", "∈": "\\in", "∉": "\\notin", "⊂": "\\subset", "∪": "\\cup", "∩": "\\cap", "∀": "\\forall", "∃": "\\exists" };
+  "⁰¹²³⁴⁵⁶⁷⁸⁹".split("").forEach((c, i) => { SYM_TEX[c] = "^{" + i + "}"; });
+  "₀₁₂₃₄₅₆₇₈₉".split("").forEach((c, i) => { SYM_TEX[c] = "_{" + i + "}"; });
+  const recent = () => { try { return JSON.parse(store.get("docxmd:symRecent", "[]")) || []; } catch (e) { return []; } };
+  function openSymbols() {
+    const latex = store.get("docxmd:symLatex", "0") === "1";
+    const b = (c) => '<button class="sym" data-pick="' + esc(c) + '" title="' + esc(latex && SYM_TEX[c] ? SYM_TEX[c] : c) + '">' + esc(c) + "</button>";
+    const r = recent();
+    const html = '<div class="pop-head"><b>Symbols</b><label class="pop-opt"><input type="checkbox" id="symLatex"' + (latex ? " checked" : "") + "> Insert as LaTeX</label></div>" +
+      (r.length ? '<div class="sym-group"><span>Recent</span><div class="sym-row">' + r.map(b).join("") + "</div></div>" : "") +
+      SYM_GROUPS.map((g) => '<div class="sym-group"><span>' + g[0] + '</span><div class="sym-row">' + g[1].split(" ").map(b).join("") + "</div></div>").join("");
+    openPop("symbols", html, (c) => {
+      const tex = store.get("docxmd:symLatex", "0") === "1" && SYM_TEX[c];
+      ta.focus(); replaceSel(tex ? SYM_TEX[c] + (/[a-z]$/i.test(SYM_TEX[c]) ? " " : "") : c);
+      const rr = recent().filter((x) => x !== c); rr.unshift(c); store.set("docxmd:symRecent", JSON.stringify(rr.slice(0, 8)));
+    });
+    const cb = popEl && popEl.querySelector("#symLatex");
+    if (cb) cb.addEventListener("change", () => { store.set("docxmd:symLatex", cb.checked ? "1" : "0"); closePop(); openSymbols(); });
+  }
+  function openCallouts() {
+    const C = (window.MD2DOCX && MD2DOCX.CALLOUTS) || {};
+    const html = '<div class="pop-head"><b>Callout block</b></div>' + ["info", "note", "tip", "success", "important", "warning", "danger"].filter((k) => C[k]).map((k) =>
+      '<button class="pop-item" data-pick="' + k + '"><i style="background:#' + C[k].color + '"></i>' + C[k].icon + " " + esc(C[k].title.en) + " <code>:::" + k + "</code></button>").join("");
+    openPop("callout", html, (k) => {
+      closePop();
+      const v = ta.value; let s = ta.selectionStart, e = ta.selectionEnd;
+      if (s !== e) { s = v.lastIndexOf("\n", s - 1) + 1; const le = v.indexOf("\n", e); e = le === -1 ? v.length : le; }
+      const body = v.slice(s, e).trim() || C[k].title.en;
+      const pre = s > 0 && v[s - 1] !== "\n" ? "\n\n" : (s > 1 && v[s - 2] !== "\n" ? "\n" : "");
+      ta.focus(); ta.setSelectionRange(s, e);
+      replaceSel(pre + ":::" + k + "\n" + body + "\n:::\n");
+    });
+  }
+
   const cmds = {
+    sup: () => toggleTag("sup"),
+    sub: () => toggleTag("sub"),
+    symbols: () => openSymbols(),
+    callout: () => openCallouts(),
     bold: () => wrap("**", "**", "bold"),
     italic: () => wrap("*", "*", "italic"),
     strike: () => wrap("~~", "~~", "strike"),
@@ -245,7 +358,7 @@
   $("#posbar").addEventListener("click", (e) => { const r = e.currentTarget.getBoundingClientRect(); scrollToFraction((e.clientX - r.left) / r.width); });
   ta.addEventListener("scroll", () => { if (editorBackdrop) { editorBackdrop.scrollTop = ta.scrollTop; editorBackdrop.scrollLeft = ta.scrollLeft; } if (mode() !== "preview") updatePos(); });
   preview.addEventListener("scroll", () => { if (mode() === "preview") updatePos(); });
-  window.addEventListener("resize", () => { updatePos(); if (findState.active) paintEditor(); });
+  window.addEventListener("resize", () => { updatePos(); paintEditor(); });
 
   /* ---------- find & replace ---------- */
   const findbar = $("#findbar"), findInput = $("#findInput"), replaceInput = $("#replaceInput"), findCount = $("#findCount");
@@ -258,7 +371,7 @@
     if (findState.active) { findState.idx = -1; findState.positioned = false; findInput.focus(); findInput.select(); runFind(false); }
     else { clearHighlights(); }
   }
-  function clearHighlights() { $$(".find-hit", preview).forEach((m) => { m.replaceWith(document.createTextNode(m.textContent)); }); preview.normalize && preview.normalize(); if (editorBackdrop) editorBackdrop.innerHTML = ""; }
+  function clearHighlights() { $$(".find-hit", preview).forEach((m) => { m.replaceWith(document.createTextNode(m.textContent)); }); preview.normalize && preview.normalize(); paintEditor(); }
 
   function paintPreview(scrollCurrent) {
     clearHighlights();
@@ -309,29 +422,37 @@
     const marker = document.createElement("span"); marker.textContent = "​"; findMirror.appendChild(marker);
     return marker.offsetTop;
   }
+  // Editor backdrop (behind the transparent textarea): tints embedded data-URI
+  // images at all times, and marks find matches while the find bar is open.
   function paintEditor() {
-    if (!findState.active || mode() === "preview") { if (editorBackdrop) editorBackdrop.innerHTML = ""; return; }
+    if (mode() === "preview") { if (editorBackdrop) editorBackdrop.innerHTML = ""; return; }
+    const v = ta.value;
+    const q = findState.active ? findInput.value : "";
+    const hasImg = v.indexOf("data:") !== -1;
+    if (!q && !hasImg) { if (editorBackdrop) editorBackdrop.innerHTML = ""; return; }
     if (!editorBackdrop) {
-      editorBackdrop = document.createElement("div"); editorBackdrop.className = "find-backdrop"; editorBackdrop.setAttribute("aria-hidden", "true");
+      editorBackdrop = document.createElement("div");
+      editorBackdrop.className = "find-backdrop";
+      editorBackdrop.setAttribute("aria-hidden", "true");
       ta.parentElement.insertBefore(editorBackdrop, ta);
     }
+    // Mirror the textarea's box metrics so the marks land exactly on the text.
     const cs = getComputedStyle(ta), s = editorBackdrop.style;
     ["fontSize", "fontWeight", "fontStyle", "letterSpacing", "wordSpacing", "lineHeight", "textTransform", "tabSize", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight"].forEach((p) => { s[p] = cs[p]; });
     s.width = ta.clientWidth + "px"; s.height = ta.clientHeight + "px";
-    const q = findInput.value;
-    if (!q) { editorBackdrop.innerHTML = ""; return; }
-    const v = ta.value, lv = v.toLowerCase(), lq = q.toLowerCase();
-    const cur = findState.hits.length ? ((findState.idx % findState.hits.length) + findState.hits.length) % findState.hits.length : -1;
-    let html = "", from = 0, i = 0, n = 0;
-    while ((i = lv.indexOf(lq, from)) !== -1) {
-      html += escapeHtml(v.slice(from, i));
-      html += '<mark class="find-hit' + (n === cur ? " find-current" : "") + '">' + escapeHtml(v.slice(i, i + q.length)) + "</mark>";
-      from = i + q.length; n++;
+    const hits = [];
+    if (q) {
+      const lv = v.toLowerCase(), lq = q.toLowerCase();
+      let i = 0, from = 0;
+      while ((i = lv.indexOf(lq, from)) !== -1) { hits.push([i, i + q.length]); from = i + q.length; }
     }
-    html += escapeHtml(v.slice(from)) + "\n";
-    editorBackdrop.innerHTML = html;
+    const cur = findState.hits.length ? ((findState.idx % findState.hits.length) + findState.hits.length) % findState.hits.length : -1;
+    editorBackdrop.innerHTML = window.MD2DOCX && MD2DOCX.backdropHtml ? MD2DOCX.backdropHtml(v, hits, q ? cur : -1, escapeHtml).html : "";
     editorBackdrop.scrollTop = ta.scrollTop; editorBackdrop.scrollLeft = ta.scrollLeft;
   }
+  let paintTimer = null;
+  function schedulePaint() { clearTimeout(paintTimer); paintTimer = setTimeout(paintEditor, 120); }
+
 
   function runFind(jump, keepInputFocus) {
     const q = findInput.value, v = ta.value;
@@ -389,6 +510,9 @@
   document.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); toggleFind(true); }
+    else if (mod && e.key === ".") { e.preventDefault(); cmds.sup(); }
+    else if (mod && e.key === ",") { e.preventDefault(); cmds.sub(); }
+    else if (e.key === "Escape" && popEl) closePop();
     else if (e.key === "Escape" && findState.active) toggleFind(false);
   });
 

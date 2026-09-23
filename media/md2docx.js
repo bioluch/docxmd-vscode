@@ -51,7 +51,7 @@
 
   function collectImageSrcs(tokens, out) {
     for (const t of tokens) {
-      if (t.type === "image" && t.href) out.add(t.href);
+      if ((t.type === "image" || t.type === "figure") && t.href) out.add(t.href);
       if (t.type === "html" && /<img\b/i.test(t.text || "")) {
         const re = /<img\b[^>]*?\bsrc\s*=\s*("([^"]*)"|'([^']*)')/gi; let m;
         while ((m = re.exec(t.text))) out.add((m[2] != null ? m[2] : m[3]).replace(/&amp;/g, "&"));
@@ -66,7 +66,7 @@
   // ---- Inline runs -------------------------------------------------------
   // ---- LaTeX → OMML (native Word math) ----------------------------------
   const GREEK = { alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ", vartheta: "ϑ", iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", upsilon: "υ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ", omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω" };
-  const MOPS = { cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", approx: "≈", neq: "≠", ne: "≠", leq: "≤", le: "≤", geq: "≥", ge: "≥", ll: "≪", gg: "≫", rightarrow: "→", to: "→", leftarrow: "←", infty: "∞", ldots: "…", cdots: "⋯", dots: "…", equiv: "≡", sim: "∼", propto: "∝", partial: "∂", nabla: "∇", sum: "∑", prod: "∏", int: "∫", in: "∈", notin: "∉", cup: "∪", cap: "∩", forall: "∀", exists: "∃" };
+  const MOPS = { cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", approx: "≈", neq: "≠", ne: "≠", leq: "≤", le: "≤", geq: "≥", ge: "≥", ll: "≪", gg: "≫", rightarrow: "→", to: "→", leftarrow: "←", infty: "∞", ldots: "…", cdots: "⋯", dots: "…", equiv: "≡", sim: "∼", propto: "∝", partial: "∂", nabla: "∇", sum: "∑", prod: "∏", int: "∫", in: "∈", notin: "∉", cup: "∪", cap: "∩", forall: "∀", exists: "∃", leftrightarrow: "↔", Rightarrow: "⇒", Leftrightarrow: "⇔", uparrow: "↑", downarrow: "↓", subset: "⊂", circ: "°", varphi: "φ" };
 
   function mathToOmml(D, tex) {
     try { return new D.Math({ children: parseTex(D, String(tex)) }); }
@@ -159,6 +159,18 @@
         }
         case "mathInline":
           runs.push(mathToOmml(D, tk.text)); break;
+        case "footnoteRef": {
+          const n = DOC.fnNum[tk.id];
+          runs.push(n ? new D.FootnoteReferenceRun(n) : mkRun(tk.raw, style, D));
+          break;
+        }
+        case "crossRef": {
+          const txt = xrefText(tk.kind, tk.id);
+          if (!txt) { runs.push(mkRun(tk.raw, style, D)); break; }
+          const anchor = tk.kind === "sec" ? bookmarkName("sec", tk.id) : bookmarkName(tk.kind, tk.id);
+          runs.push(new D.InternalHyperlink({ anchor, children: [new D.TextRun({ text: txt, color: "0563C1", underline: {} })] }));
+          break;
+        }
         case "html": {
           // marked emits <sup>, "1", </sup> as separate tokens: formatting tags
           // switch the style for the following tokens; other tags are dropped.
@@ -204,6 +216,7 @@
       strike: !!style.strike,
       underline: style.underline ? {} : undefined,
       superScript: style.sup || undefined,
+      size: style.size || undefined,
       subScript: style.sub || undefined,
       color: style.color
     });
@@ -284,23 +297,26 @@
   function buildTable(tk, ctx) {
     const D = ctx.D;
     const rows = [];
-    const aligns = tk.align || [];
-    const mkCell = (cell, header) => new D.TableCell({
+    const compact = ctx.tableMode === "compact";
+    // explicit :--: alignment wins; otherwise all-numeric columns align right (as in the preview)
+    const aligns = (tk.header || []).map((c, i) => (tk.align && tk.align[i]) ||
+      (tk.rows.length && tk.rows.every((r) => r[i] && isNumericCell(r[i].text)) ? "right" : null));
+    const mkCell = (cell, header, zebra) => new D.TableCell({
       children: [new D.Paragraph({
-        children: inlineRuns(cell.tokens || [{ type: "text", text: cell.text }], header ? { bold: true } : {}, ctx.imgMap, D),
+        children: inlineRuns(cell.tokens || [{ type: "text", text: cell.text }], Object.assign(header ? { bold: true } : {}, compact ? { size: 18 } : {}), ctx.imgMap, D),
         alignment: mapAlign(aligns[cell.__i], D)
       })],
-      shading: header ? { type: D.ShadingType.CLEAR, fill: "F0F0F0" } : undefined,
-      margins: { top: 40, bottom: 40, left: 80, right: 80 }
+      shading: header ? { type: D.ShadingType.CLEAR, fill: "F0F0F0" } : zebra ? { type: D.ShadingType.CLEAR, fill: "F7F7F7" } : undefined,
+      margins: compact ? { top: 10, bottom: 10, left: 60, right: 60 } : { top: 40, bottom: 40, left: 80, right: 80 }
     });
     const head = new D.TableRow({
       tableHeader: true,
       children: tk.header.map((c, i) => { c.__i = i; return mkCell(c, true); })
     });
     rows.push(head);
-    for (const r of tk.rows) {
-      rows.push(new D.TableRow({ children: r.map((c, i) => { c.__i = i; return mkCell(c, false); }) }));
-    }
+    tk.rows.forEach((r, ri) => {
+      rows.push(new D.TableRow({ children: r.map((c, i) => { c.__i = i; return mkCell(c, false, ri % 2 === 1); }) }));
+    });
     return new D.Table({
       rows,
       width: { size: 100, type: D.WidthType.PERCENTAGE },
@@ -318,19 +334,28 @@
   // Blockquote → one-cell table with only a left bar, so the bar is continuous
   // and the quote can hold any block: paragraphs, lists, code, tables, quotes.
   const QUOTE_STYLE = { color: "666666" };
-  function buildQuote(tk, ctx, color) {
+  const CALLOUT_STYLE = { color: "333333" };
+  // box: the colorBox token (callout kind / title) or undefined for a plain quote
+  function buildQuote(tk, ctx, color, box) {
     const D = ctx.D;
     const bar = { style: D.BorderStyle.SINGLE, size: 24, color: color || ctx.quoteColor || "BBBBBB" };
-    const qctx = Object.assign({}, ctx, { baseStyle: QUOTE_STYLE });
+    const kind = box && box.kind;
+    const TXT = kind ? CALLOUT_STYLE : QUOTE_STYLE;
+    const qctx = Object.assign({}, ctx, { baseStyle: TXT });
     const kids = [];
     const para = (runs, extra) => kids.push(new D.Paragraph(Object.assign({ children: runs, spacing: { after: 80 } }, extra)));
+    if (box && box.titleTokens) {
+      const runs = inlineRuns(box.titleTokens, { bold: true, color: "222222" }, ctx.imgMap, D);
+      if (kind) runs.unshift(mkRun(CALLOUTS[kind].icon + " ", { bold: true }, D));
+      para(runs, { spacing: { after: 60 } });
+    }
     for (const b of (tk.tokens || global.marked.lexer(tk.text || ""))) {
       switch (b.type) {
         case "space": break;
         case "paragraph": case "text":
-          para(inlineRuns(b.tokens || [{ type: "text", text: b.text }], QUOTE_STYLE, ctx.imgMap, D)); break;
+          para(inlineRuns(b.tokens || [{ type: "text", text: b.text }], TXT, ctx.imgMap, D)); break;
         case "heading":
-          para(inlineRuns(b.tokens, Object.assign({ bold: true }, QUOTE_STYLE), ctx.imgMap, D)); break;
+          para(inlineRuns(b.tokens, Object.assign({ bold: true }, TXT), ctx.imgMap, D)); break;
         case "list":
           if (b.ordered) ctx.ol++;
           buildList(b, 0, ctx.ol, qctx, kids); break;
@@ -338,12 +363,15 @@
         case "mathBlock": para([mathToOmml(D, b.text)], { alignment: D.AlignmentType.CENTER }); break;
         case "table": kids.push(buildTable(b, ctx)); break;
         case "blockquote": kids.push(buildQuote(b, ctx)); break;
-        case "colorBox": kids.push(buildQuote({ tokens: unwrapQuotes(b.tokens) }, ctx, b.color)); break;
+        case "colorBox": kids.push(buildQuote({ tokens: unwrapQuotes(b.tokens) }, ctx, b.color, b)); break;
+        case "tableBox":
+          for (const x of b.tokens) if (x.type === "table") kids.push(buildTable(x, Object.assign({}, ctx, { tableMode: b.mode })));
+          break;
         case "hr": break;
         default: {
           const txt = String(b.text || "").replace(/<[^>]*>/g, "").trim();
-          if (b.tokens) para(inlineRuns(b.tokens, QUOTE_STYLE, ctx.imgMap, D));
-          else if (txt) para([mkRun(decode(txt), QUOTE_STYLE, D)]);
+          if (b.tokens) para(inlineRuns(b.tokens, TXT, ctx.imgMap, D));
+          else if (txt) para([mkRun(decode(txt), TXT, D)]);
         }
       }
     }
@@ -355,7 +383,8 @@
       borders: { top: none, bottom: none, right: none, insideHorizontal: none, insideVertical: none, left: bar },
       rows: [new D.TableRow({ children: [new D.TableCell({
         children: kids,
-        margins: { top: 60, bottom: 20, left: 240, right: 80 },
+        shading: kind ? { type: D.ShadingType.CLEAR, fill: tint(color), color: "auto" } : undefined,
+        margins: kind ? { top: 100, bottom: 60, left: 240, right: 160 } : { top: 60, bottom: 20, left: 240, right: 80 },
         borders: { top: none, bottom: none, right: none, left: bar }
       })] })]
     });
@@ -523,9 +552,53 @@
     "бірюзовий": "00897B", "синій": "1E88E5", "блакитний": "1E88E5", "фіолетовий": "8E24AA",
     "рожевий": "D81B60", "сірий": "9E9E9E", "чорний": "212121"
   };
+  // Callout types (info / note / tip / success / important / warning / danger).
+  // Colours are fixed so preview, print, HTML and DOCX look the same in every theme.
+  const CALLOUTS = {
+    info:      { color: "1E88E5", icon: "ℹ️", title: { en: "Info", uk: "Інформація", es: "Información", zh: "信息" } },
+    note:      { color: "78909C", icon: "📝", title: { en: "Note", uk: "Примітка", es: "Nota", zh: "注" } },
+    tip:       { color: "00897B", icon: "💡", title: { en: "Tip", uk: "Порада", es: "Consejo", zh: "提示" } },
+    success:   { color: "43A047", icon: "✅", title: { en: "Success", uk: "Успіх", es: "Éxito", zh: "成功" } },
+    important: { color: "8E24AA", icon: "❗", title: { en: "Important", uk: "Важливо", es: "Importante", zh: "重要" } },
+    warning:   { color: "F9A825", icon: "⚠️", title: { en: "Warning", uk: "Попередження", es: "Advertencia", zh: "警告" } },
+    danger:    { color: "E53935", icon: "⛔", title: { en: "Danger", uk: "Небезпека", es: "Peligro", zh: "危险" } }
+  };
+  const CALLOUT_ALIAS = {
+    caution: "danger", error: "danger", hint: "tip", check: "success", attention: "warning",
+    "інформація": "info", "примітка": "note", "порада": "tip", "успіх": "success",
+    "важливо": "important", "попередження": "warning", "увага": "warning", "небезпека": "danger"
+  };
+  function calloutKind(name) {
+    const n = String(name || "").trim().toLowerCase();
+    return CALLOUTS[n] ? n : (CALLOUT_ALIAS[n] || null);
+  }
+  function calloutTitle(kind) {
+    const L = (global.I18N && global.I18N.lang) || "en";
+    const t = CALLOUTS[kind].title; return t[L] || t.en;
+  }
+  // DOCX import: which callout draws this bar colour (callouts always have a fill)
+  function calloutByColor(hex) {
+    hex = String(hex || "").replace(/^#/, "").toUpperCase();
+    for (const k in CALLOUTS) if (CALLOUTS[k].color === hex) return k;
+    return null;
+  }
+  function isDefaultCalloutTitle(kind, title) {
+    const t = CALLOUTS[kind] && CALLOUTS[kind].title; if (!t) return false;
+    return Object.keys(t).some((l) => t[l].toLowerCase() === String(title).trim().toLowerCase());
+  }
+  // light background for a callout: the bar colour mixed with white
+  function tint(hex, amount) {
+    const n = parseInt(hex, 16), a = amount == null ? 0.88 : amount;
+    return [16, 8, 0].map((sh) => { const c = (n >> sh) & 255; return Math.round(c + (255 - c) * a).toString(16).padStart(2, "0"); }).join("").toUpperCase();
+  }
+  function rgba(hex, a) {
+    const n = parseInt(hex, 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  }
+  const TABLE_MODES = { "table-compact": "compact", "table-full": "full" };
   function boxColor(name) {
     if (!name) return null;
-    const n = String(name).trim().toLowerCase();
+    const n = String(name).trim().toLowerCase().replace(/^quote-/, "");
     let m = /^#([0-9a-f]{6})$/.exec(n); if (m) return m[1].toUpperCase();
     m = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(n); if (m) return (m[1] + m[1] + m[2] + m[2] + m[3] + m[3]).toUpperCase();
     return BOX_COLORS[n] || null;
@@ -543,23 +616,300 @@
     real.forEach((q, i) => { if (i) out.push({ type: "space", raw: "\n" }); out.push(...(q.tokens || [])); });
     return out;
   }
-  const BOX_RE = /^:::[ \t]*(#?[0-9A-Za-zЀ-ӿ]+)[ \t]*\n([\s\S]*?\n)?[ \t]*:::[ \t]*(?:\n|$)/;
+  const escHtml = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // :::name [title]  …  :::   (name = colour | callout type | table mode)
+  const BOX_RE = /^:::[ \t]*(#?[0-9A-Za-zЀ-ӿ-]+)(?:[ \t]+([^\n]*?))?[ \t]*\n([\s\S]*?\n)?[ \t]*:::[ \t]*(?:\n|$)/;
+  function boxToken(lexer, raw, name, title, body) {
+    const tokens = lexer.blockTokens(body || "", []);
+    const mode = TABLE_MODES[String(name).toLowerCase()];
+    if (mode) return { type: "tableBox", raw, mode, tokens };
+    const kind = calloutKind(name);
+    const color = kind ? CALLOUTS[kind].color : boxColor(name);
+    if (!color) return undefined;
+    const tok = { type: "colorBox", raw, color, kind, tokens };
+    title = (title || "").trim();
+    if (kind || title) {
+      tok.title = title || calloutTitle(kind);
+      tok.titleTokens = lexer.inlineTokens(tok.title);
+    }
+    return tok;
+  }
+  function boxRenderer(t) {
+    const style = "border-left-color:#" + t.color + (t.kind ? ";background:" + rgba(t.color, 0.1) : "");
+    const head = t.titleTokens ? '<p class="callout-title">' +
+      (t.kind ? '<span class="callout-icon">' + CALLOUTS[t.kind].icon + "</span> " : "") +
+      this.parser.parseInline(t.titleTokens) + "</p>\n" : "";
+    return '<blockquote class="md-box' + (t.kind ? " callout callout-" + t.kind : "") + '" style="' + style + '">\n' +
+      head + this.parser.parse(unwrapQuotes(t.tokens)) + "</blockquote>\n";
+  }
   function colorBoxExtension() {
     return {
       name: "colorBox", level: "block",
       start(src) { const m = /(^|\n):::[ \t]*#?[0-9A-Za-zЀ-ӿ]/.exec(src); return m ? m.index + m[1].length : undefined; },
       tokenizer(src) {
         const m = BOX_RE.exec(src);
-        const color = m && boxColor(m[1]);
-        if (!color) return undefined;
-        return { type: "colorBox", raw: m[0], color, tokens: this.lexer.blockTokens(m[2] || "", []) };
+        return m ? boxToken(this.lexer, m[0], m[1], m[2], m[3]) : undefined;
       },
-      renderer(t) {
-        return '<blockquote class="md-box" style="border-left-color:#' + t.color + '">\n' +
-          this.parser.parse(unwrapQuotes(t.tokens)) + "</blockquote>\n";
+      renderer: boxRenderer
+    };
+  }
+  // table-compact / table-full wrappers
+  function tableBoxExtension() {
+    return {
+      name: "tableBox", level: "block",
+      renderer(t) { return '<div class="tbl-' + t.mode + '">\n' + this.parser.parse(t.tokens) + "</div>\n"; }
+    };
+  }
+  // GitHub / Obsidian alerts:  > [!WARNING] optional title
+  const GH_KIND = { note: "note", tip: "tip", important: "important", warning: "warning", caution: "danger" };
+  function alertExtension() {
+    return {
+      name: "ghAlert", level: "block",
+      start(src) { const m = /(^|\n) {0,3}> ?\[!/.exec(src); return m ? m.index + m[1].length : undefined; },
+      tokenizer(src) {
+        const m = /^(?: {0,3}>[^\n]*(?:\n|$))+/.exec(src);
+        if (!m) return undefined;
+        const lines = m[0].replace(/\n$/, "").split("\n");
+        const h = /^ {0,3}> ?\[!([A-Za-zЀ-ӿ]+)\][+-]?[ \t]*(.*)$/.exec(lines[0]);
+        if (!h) return undefined;
+        const name = h[1].toLowerCase();
+        const kind = GH_KIND[name] || calloutKind(name);
+        if (!kind) return undefined;
+        const body = lines.slice(1).map((l) => l.replace(/^ {0,3}> ?/, "")).join("\n") + "\n";
+        return boxToken(this.lexer, m[0], kind, h[2], body);
+      },
+      renderer: boxRenderer
+    };
+  }
+  // Source ranges of embedded (data-URI) images — ![alt](data:…) and <img src="data:…">.
+  // The editors tint these long base64 runs so they stand out from the text.
+  const DATA_IMG_RE = /!\[[^\]\n]*\]\(\s*<?data:[^)\s]*[^)]*\)|<img\b[^>]*?\bsrc\s*=\s*(["'])data:[\s\S]*?\1[^>]*>/gi;
+  function dataImageRanges(text) {
+    const out = [];
+    if (!text || text.indexOf("data:") === -1) return out;
+    DATA_IMG_RE.lastIndex = 0;
+    let m;
+    while ((m = DATA_IMG_RE.exec(text))) out.push([m.index, m.index + m[0].length]);
+    return out;
+  }
+  // HTML for the editor backdrop: data-URI images tinted, find matches marked on top.
+  // hits: [[start, end], …] (sorted), cur: index of the current hit or -1.
+  function backdropHtml(text, hits, cur, esc) {
+    const imgs = dataImageRanges(text);
+    const cuts = new Set([0, text.length]);
+    imgs.forEach((r) => { cuts.add(r[0]); cuts.add(r[1]); });
+    hits.forEach((r) => { cuts.add(r[0]); cuts.add(r[1]); });
+    const pts = Array.from(cuts).sort((x, y) => x - y);
+    let html = "", ii = 0, hi = 0;
+    for (let k = 0; k < pts.length - 1; k++) {
+      const a = pts[k], b = pts[k + 1];
+      while (ii < imgs.length && imgs[ii][1] <= a) ii++;
+      while (hi < hits.length && hits[hi][1] <= a) hi++;
+      let seg = esc(text.slice(a, b));
+      if (hi < hits.length && hits[hi][0] <= a && b <= hits[hi][1]) seg = '<mark class="find-hit' + (hi === cur ? " find-current" : "") + '">' + seg + "</mark>";
+      if (ii < imgs.length && imgs[ii][0] <= a && b <= imgs[ii][1]) seg = '<span class="img-data">' + seg + "</span>";
+      html += seg;
+    }
+    return { html: html + "\n", images: imgs.length };
+  }
+
+  // ---- Document structure: footnotes, figure/table captions, cross-refs, TOC ----
+  // Syntax follows Pandoc / pandoc-crossref so documents stay portable:
+  //   text[^1]   [^1]: note            footnotes
+  //   ![Caption](img.png){#fig:id}     numbered figure (optional width=70%)
+  //   Table: Caption {#tbl:id}         numbered table caption (line before/after the table)
+  //   ## Heading {#sec:id}             section anchor
+  //   @fig:id  @tbl:id  @sec:id        cross-references (also [@fig:id])
+  //   [TOC]                            table of contents
+  //   <!-- docxmd: numbered-headings -->  number headings 1, 1.1, 1.1.1
+  const WORDS = {
+    fig: { en: "Figure", uk: "Рисунок", es: "Figura", zh: "图" },
+    tbl: { en: "Table", uk: "Таблиця", es: "Tabla", zh: "表" },
+    toc: { en: "Contents", uk: "Зміст", es: "Contenido", zh: "目录" }
+  };
+  const uiLang = () => (global.I18N && global.I18N.lang) || "en";
+  const word = (k) => WORDS[k][uiLang()] || WORDS[k].en;
+  const NUMBERING_RE = /<!--\s*docxmd:\s*numbered-headings\s*-->/i;
+  const SEC_ATTR_RE = /[ \t]*\{#sec:([A-Za-z0-9_-]+)\}[ \t]*$/;
+  // Word bookmark names: letters, digits, "_" only ("-" → "__", reversed on import)
+  const bookmarkName = (kind, id) => (kind + "_" + String(id).replace(/-/g, "__")).slice(0, 40);
+
+  function emptyDoc() { return { figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
+  let DOC = emptyDoc();
+
+  function tokensText(tokens) {
+    return (tokens || []).map((t) => t.tokens ? tokensText(t.tokens) : t.type === "html" ? "" : decode(t.text || "")).join("");
+  }
+  // One pass over the lexed document (before rendering): numbers figures, tables,
+  // footnotes and headings, strips {#sec:id} from headings and remembers anchors.
+  function analyzeDoc(tokens) {
+    const D = emptyDoc();
+    let fig = 0, tbl = 0, fn = 0, hn = 0;
+    (function walk(list) {
+      for (const t of list || []) {
+        if (!t || typeof t !== "object") continue;
+        switch (t.type) {
+          case "html": if (NUMBERING_RE.test(t.raw || t.text || "")) D.numbered = true; break;
+          case "heading": {
+            const m = SEC_ATTR_RE.exec(t.text || "");
+            let sec = null;
+            if (m) {
+              sec = m[1];
+              t.text = t.text.replace(SEC_ATTR_RE, "");
+              const last = t.tokens && t.tokens[t.tokens.length - 1];
+              if (last && last.type === "text") { last.text = last.text.replace(SEC_ATTR_RE, ""); last.raw = (last.raw || "").replace(SEC_ATTR_RE, ""); }
+            }
+            const h = { depth: t.depth, text: tokensText(t.tokens).trim(), sec, anchor: sec ? "sec:" + sec : "h-" + (hn++), num: "" };
+            t._h = h; D.headings.push(h);
+            if (sec) D.secs[sec] = h;
+            break;
+          }
+          case "figure": if (t.id && !(t.id in D.figs)) D.figs[t.id] = ++fig; break;
+          case "tableCaption": if (!(t.id in D.tbls)) D.tbls[t.id] = ++tbl; break;
+          case "footnoteDef": D.fnDefs[t.id] = t; break;
+          case "footnoteRef": if (!(t.id in D.fnNum)) { D.fnNum[t.id] = ++fn; D.fnOrder.push(t.id); } break;
+          case "toc": D.hasToc = true; break;
+        }
+        if (t.tokens) walk(t.tokens);
+        if (t.titleTokens) walk(t.titleTokens);
+        if (t.captionTokens) walk(t.captionTokens);
+        if (t.items) t.items.forEach((it) => walk(it.tokens));
+        if (t.header) t.header.forEach((c) => walk(c.tokens));
+        if (t.rows) t.rows.forEach((r) => r.forEach((c) => walk(c.tokens)));
+      }
+    })(tokens);
+    if (D.numbered && D.headings.length) {
+      // a single top-level title is not numbered: numbering starts one level below it
+      const h1 = D.headings.filter((h) => h.depth === 1).length;
+      const min = h1 === 1 && D.headings.some((h) => h.depth > 1) ? 2 : Math.min.apply(null, D.headings.map((h) => h.depth));
+      const c = [0, 0, 0, 0, 0, 0, 0];
+      D.headings.forEach((h) => {
+        if (h.depth < min) return;
+        const lvl = h.depth - min;
+        c[lvl]++; for (let k = lvl + 1; k < c.length; k++) c[k] = 0;
+        h.num = c.slice(0, lvl + 1).map((x) => x || 1).join(".");
+      });
+    }
+    return D;
+  }
+  const xrefText = (kind, id) => {
+    if (kind === "sec") { const h = DOC.secs[id]; return h ? (h.num ? h.num + " " : "") + h.text : null; }
+    const n = (kind === "fig" ? DOC.figs : DOC.tbls)[id];
+    return n ? word(kind) + " " + n : null;
+  };
+  const xrefAnchor = (kind, id) => (kind === "sec" ? (DOC.secs[id] ? DOC.secs[id].anchor : "") : kind + ":" + id);
+
+  const FIG_RE = /^!\[((?:[^\]\\\n]|\\.)*)\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+"([^"\n]*)")?\s*\)\{([^}\n]*)\}[ \t]*(?:\n+|$)/;
+  const TBLCAP_RE = /^(?:Table|Таблиця|Tabla|表)[ \t]*[:：][ \t]*([^\n]*?)[ \t]*\{#tbl:([A-Za-z0-9_-]+)\}[ \t]*(?:\n+|$)/;
+  function structureExtensions() {
+    return [
+      { name: "footnoteDef", level: "block",
+        start(src) { const m = /(^|\n)\[\^[^\]\s]+\]:/.exec(src); return m ? m.index + m[1].length : undefined; },
+        tokenizer(src) {
+          const m = /^\[\^([^\]\s]+)\]:[ \t]*([^\n]*(?:\n(?:[ \t]{2,}|\t)[^\n]*)*)(?:\n+|$)/.exec(src);
+          if (!m) return undefined;
+          const text = m[2].replace(/\n[ \t]+/g, " ").trim();
+          return { type: "footnoteDef", raw: m[0], id: m[1], text, tokens: this.lexer.inlineTokens(text) };
+        },
+        renderer() { return ""; } },
+      { name: "footnoteRef", level: "inline",
+        start(src) { const i = src.indexOf("[^"); return i < 0 ? undefined : i; },
+        tokenizer(src) { const m = /^\[\^([^\]\s]+)\](?!:)/.exec(src); if (m) return { type: "footnoteRef", raw: m[0], id: m[1] }; },
+        renderer(t) {
+          const n = DOC.fnNum[t.id]; if (!n) return escHtml(t.raw);
+          const first = !DOC.fnSeen[t.id]; DOC.fnSeen[t.id] = 1;
+          return '<sup class="fn-ref"' + (first ? ' id="fnref-' + escHtml(t.id) + '"' : "") + '><a href="#fn-' + escHtml(t.id) + '">' + n + "</a></sup>";
+        } },
+      { name: "footnotes", level: "block",
+        renderer() {
+          if (!DOC.fnOrder.length) return "";
+          return '<section class="footnotes"><ol>' + DOC.fnOrder.map((id) => {
+            const d = DOC.fnDefs[id];
+            return '<li id="fn-' + escHtml(id) + '" value="' + DOC.fnNum[id] + '">' + (d ? this.parser.parseInline(d.tokens) : "<em>?</em>") +
+              ' <a href="#fnref-' + escHtml(id) + '" class="fn-back">↩</a></li>';
+          }).join("") + "</ol></section>\n";
+        } },
+      { name: "figure", level: "block",
+        start(src) { const m = /(^|\n)!\[/.exec(src); return m ? m.index + m[1].length : undefined; },
+        tokenizer(src) {
+          const m = FIG_RE.exec(src); if (!m) return undefined;
+          const id = /#fig:([A-Za-z0-9_-]+)/.exec(m[4]); if (!id) return undefined;
+          const w = /\bwidth\s*=\s*"?([\d.]+(?:%|px|cm|mm|in)?)"?/.exec(m[4]);
+          const caption = m[1].replace(/\\(.)/g, "$1");
+          return { type: "figure", raw: m[0], id: id[1], href: m[2].replace(/^<|>$/g, ""), title: m[3] || "", caption,
+            width: w ? w[1] : "", captionTokens: this.lexer.inlineTokens(caption) };
+        },
+        renderer(t) {
+          const n = DOC.figs[t.id], cap = this.parser.parseInline(t.captionTokens);
+          return '<figure class="fig" id="fig:' + escHtml(t.id) + '"><img src="' + escHtml(t.href) + '" alt="' + escHtml(tokensText(t.captionTokens)) + '"' +
+            (t.title ? ' title="' + escHtml(t.title) + '"' : "") + (t.width ? ' style="width:' + escHtml(/^[\d.]+$/.test(t.width) ? t.width + "px" : t.width) + '"' : "") +
+            '><figcaption><strong>' + word("fig") + " " + (n || "?") + "</strong>" + (t.caption ? " — " + cap : "") + "</figcaption></figure>\n";
+        } },
+      { name: "tableCaption", level: "block",
+        start(src) { const m = /(^|\n)(?:Table|Таблиця|Tabla|表)[ \t]*[:：]/.exec(src); return m ? m.index + m[1].length : undefined; },
+        tokenizer(src) {
+          const m = TBLCAP_RE.exec(src); if (!m) return undefined;
+          return { type: "tableCaption", raw: m[0], id: m[2], caption: m[1], captionTokens: this.lexer.inlineTokens(m[1]) };
+        },
+        renderer(t) {
+          return '<p class="tbl-caption" id="tbl:' + escHtml(t.id) + '"><strong>' + word("tbl") + " " + (DOC.tbls[t.id] || "?") + "</strong>" +
+            (t.caption ? " — " + this.parser.parseInline(t.captionTokens) : "") + "</p>\n";
+        } },
+      { name: "crossRef", level: "inline",
+        start(src) { const m = /\[?@(?:fig|tbl|sec):/.exec(src); return m ? m.index : undefined; },
+        tokenizer(src) {
+          const m = /^\[@(fig|tbl|sec):([A-Za-z0-9_-]+)\]/.exec(src) || /^@(fig|tbl|sec):([A-Za-z0-9_-]+)/.exec(src);
+          if (m) return { type: "crossRef", raw: m[0], kind: m[1], id: m[2] };
+        },
+        renderer(t) {
+          const txt = xrefText(t.kind, t.id);
+          if (!txt) return '<span class="xref-missing" title="?">' + escHtml(t.raw) + "</span>";
+          return '<a class="xref" href="#' + escHtml(xrefAnchor(t.kind, t.id)) + '">' + escHtml(txt) + "</a>";
+        } },
+      { name: "toc", level: "block",
+        start(src) { const m = /(^|\n)\[TOC\]/i.exec(src); return m ? m.index + m[1].length : undefined; },
+        tokenizer(src) { const m = /^\[TOC\][ \t]*(?:\n+|$)/i.exec(src); if (m) return { type: "toc", raw: m[0] }; },
+        renderer() {
+          const hs = DOC.headings.filter((h) => h.depth <= 3 && h.text);
+          if (!hs.length) return "";
+          const min = Math.min.apply(null, hs.map((h) => h.depth));
+          return '<nav class="toc"><p class="toc-title">' + word("toc") + '</p><ul>' + hs.map((h) =>
+            '<li class="toc-l' + (h.depth - min + 1) + '"><a href="#' + escHtml(h.anchor) + '">' + (h.num ? '<span class="hnum">' + h.num + "</span> " : "") +
+            escHtml(h.text) + "</a></li>").join("") + "</ul></nav>\n";
+        } }
+    ];
+  }
+  // Full marked configuration used by the PWA and the VS Code webview.
+  function markedConfig() {
+    return {
+      extensions: extensions(),
+      hooks: {
+        preprocess(md) { DOC = emptyDoc(); return md; },
+        processAllTokens(tokens) {
+          DOC = analyzeDoc(tokens);
+          if (DOC.fnOrder.length) tokens.push({ type: "footnotes", raw: "" });
+          return tokens;
+        }
+      },
+      renderer: {
+        heading(text, level) {
+          const h = DOC.headings[DOC.hIndex++] || {};
+          return "<h" + level + (h.anchor ? ' id="' + escHtml(h.anchor) + '"' : "") + ">" +
+            (h.num ? '<span class="hnum">' + h.num + "</span> " : "") + text + "</h" + level + ">\n";
+        }
       }
     };
   }
+
+  // All DOCXMD marked extensions (register in the PWA and the VS Code webview)
+  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension()].concat(structureExtensions()); }
+
+  // Numeric column detection (shared by preview and DOCX): a column with no
+  // explicit alignment whose body cells are all numbers (optionally with a unit,
+  // a range or a comparison) is right-aligned.
+  const NUM_RE = /^[<>≤≥~≈±+\-−]?\s*\d[\d\s.,]*(?:\s*[–—-]\s*\d[\d\s.,]*)?\s*(?:%|‰|°\s?[CF]|[A-Za-zµμ°²³\/·]{1,8})?$/;
+  const cellPlain = (x) => String(x == null ? "" : x).replace(/<[^>]*>/g, "").replace(/[*_`~]/g, "").replace(/&nbsp;/g, " ").trim();
+  function isNumericCell(text) { const v = cellPlain(text); return !!v && NUM_RE.test(v); }
 
   // ---- Main --------------------------------------------------------------
   async function toBlob(markdown, opts, onProgress) {
@@ -570,6 +920,7 @@
 
     report(0.05, "parse");
     const tokens = global.marked.lexer(markdown || "");
+    DOC = analyzeDoc(tokens); // numbers figures/tables/footnotes/headings (same as the preview)
 
     // Pre-fetch images
     const srcs = new Set();
@@ -601,13 +952,47 @@
       const tk = tokens[i];
       try {
         switch (tk.type) {
-          case "heading":
+          case "heading": {
+            const h = tk._h || {};
+            let hr = inlineRuns(tk.tokens, {}, imgMap, D);
+            if (h.num) hr.unshift(new D.TextRun(h.num + " "));
+            if (h.sec) hr = [new D.Bookmark({ id: bookmarkName("sec", h.sec), children: hr })];
+            // marker so a DOCX import restores <!-- docxmd: numbered-headings -->
+            if (h.num && !ctx.numMarked) { ctx.numMarked = true; hr.unshift(new D.Bookmark({ id: "docxmd_numbered", children: [] })); }
             body.push(new D.Paragraph({
               heading: H[tk.depth] || D.HeadingLevel.HEADING_6,
-              children: inlineRuns(tk.tokens, {}, imgMap, D),
+              children: hr,
               alignment: mapAlign(curAlign(), D),
               spacing: { before: 240, after: 80 }
             }));
+            break;
+          }
+          case "footnoteDef": break;          // written as real Word footnotes (see below)
+          case "figure": {
+            const info = imgMap.get(tk.href);
+            let img;
+            if (info) {
+              let w = info.width, h = info.height;
+              const pct = /^([\d.]+)%$/.exec(tk.width || ""), px = /^([\d.]+)(?:px)?$/.exec(tk.width || "");
+              const target = pct ? MAX_IMG_W * Math.min(100, +pct[1]) / 100 : px ? Math.min(MAX_IMG_W, +px[1]) : 0;
+              if (target) { h = Math.round(h * target / w); w = Math.round(target); }
+              img = new D.ImageRun({ data: info.data, type: info.type, transformation: { width: w, height: h } });
+            } else img = mkRun("[" + tk.caption + "]", { italics: true }, D);
+            body.push(new D.Paragraph({ children: [img], alignment: D.AlignmentType.CENTER, keepNext: true, spacing: { before: 120, after: 60 } }));
+            const cap = [new D.Bookmark({ id: bookmarkName("fig", tk.id), children: [new D.TextRun({ text: word("fig") + " " + (DOC.figs[tk.id] || "?"), bold: true })] })];
+            if (tk.caption) cap.push(new D.TextRun(" — "), ...inlineRuns(tk.captionTokens, {}, imgMap, D));
+            body.push(new D.Paragraph({ children: cap, alignment: D.AlignmentType.CENTER, spacing: { after: 200 } }));
+            break;
+          }
+          case "tableCaption": {
+            const cap = [new D.Bookmark({ id: bookmarkName("tbl", tk.id), children: [new D.TextRun({ text: word("tbl") + " " + (DOC.tbls[tk.id] || "?"), bold: true })] })];
+            if (tk.caption) cap.push(new D.TextRun(" — "), ...inlineRuns(tk.captionTokens, {}, imgMap, D));
+            body.push(new D.Paragraph({ children: cap, keepNext: true, spacing: { before: 160, after: 80 } }));
+            break;
+          }
+          case "toc":
+            body.push(new D.Paragraph({ children: [new D.Bookmark({ id: "docxmd_toc", children: [new D.TextRun({ text: word("toc"), bold: true, size: 28 })] })], spacing: { before: 120, after: 120 } }));
+            body.push(new D.TableOfContents(word("toc"), { hyperlink: true, headingStyleRange: "1-3" }));
             break;
           case "paragraph":
             body.push(new D.Paragraph({
@@ -624,7 +1009,7 @@
             }));
             break;
           case "colorBox":
-            body.push(buildQuote({ tokens: unwrapQuotes(tk.tokens) }, ctx, tk.color));
+            body.push(buildQuote({ tokens: unwrapQuotes(tk.tokens) }, ctx, tk.color, tk));
             body.push(new D.Paragraph({ text: "", spacing: { after: 80 } }));
             break;
           case "blockquote":
@@ -650,6 +1035,11 @@
             break;
           case "space":
             break;
+          case "tableBox":
+            // :::table-compact / :::table-full — process the content with the table mode set
+            tokens.splice(i + 1, 0, { type: "__tblmode", mode: tk.mode }, ...tk.tokens, { type: "__tblmode", mode: null });
+            break;
+          case "__tblmode": ctx.tableMode = tk.mode; break;
           case "__alignpush": alignStack.push(tk.a); break;
           case "__alignpop": alignStack.pop(); break;
           case "html": {
@@ -701,7 +1091,14 @@
       style: { paragraph: { indent: { left: 360 * (l + 1) + 360, hanging: 360 } } }
     }));
 
+    const footnotes = {};
+    DOC.fnOrder.forEach((id) => {
+      const d = DOC.fnDefs[id];
+      footnotes[DOC.fnNum[id]] = { children: [new D.Paragraph({ children: d ? inlineRuns(d.tokens, {}, imgMap, D) : [new D.TextRun("?")] })] };
+    });
     const doc = new D.Document({
+      footnotes,
+      features: DOC.hasToc ? { updateFields: true } : undefined,
       creator: "DOCXMD",
       title: opts.title || "Document",
       description: "Converted from Markdown by DOCXMD",
@@ -728,5 +1125,7 @@
     return blob;
   }
 
-  global.MD2DOCX = { toBlob, ready, colorBoxExtension, boxColor, colorName, BOX_COLORS };
+  global.MD2DOCX = { toBlob, ready, extensions, colorBoxExtension, boxColor, colorName, BOX_COLORS,
+    CALLOUTS, calloutKind, calloutByColor, isDefaultCalloutTitle, isNumericCell, dataImageRanges, backdropHtml,
+    markedConfig, bookmarkName, NUMBERING_RE };
 })(typeof window !== "undefined" ? window : this);
