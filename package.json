@@ -1,16 +1,35 @@
 {
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
-  "description": "Edit Markdown with a live neumorphic preview and export to Word (.docx), inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.6",
+  "description": "Edit Markdown with a live neumorphic preview, LaTeX math and colour boxes; export to Word (.docx) and import Word back to Markdown with table colours — inside VS Code. Companion to the DOCXMD PWA.",
+  "version": "0.1.7",
   "publisher": "docxmd",
-  "engines": { "vscode": "^1.80.0" },
-  "categories": ["Other", "Formatters"],
-  "keywords": ["markdown", "docx", "word", "preview", "converter"],
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other",
+    "Formatters"
+  ],
+  "keywords": [
+    "markdown",
+    "docx",
+    "word",
+    "preview",
+    "converter",
+    "latex",
+    "katex",
+    "import"
+  ],
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/bioluch/docxmd-vscode#readme",
-  "repository": { "type": "git", "url": "https://github.com/bioluch/docxmd-vscode.git" },
-  "bugs": { "url": "https://github.com/bioluch/docxmd-vscode/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bioluch/docxmd-vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bioluch/docxmd-vscode/issues"
+  },
   "activationEvents": [],
   "main": "./extension.js",
   "icon": "media/icon.png",
@@ -29,20 +48,53 @@
       {
         "viewType": "docxmd.editor",
         "displayName": "DOCXMD Editor",
-        "selector": [{ "filenamePattern": "*.md" }, { "filenamePattern": "*.markdown" }],
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          },
+          {
+            "filenamePattern": "*.markdown"
+          }
+        ],
         "priority": "default"
       }
     ],
     "commands": [
-      { "command": "docxmd.openWith", "title": "DOCXMD: Open in DOCXMD Editor", "category": "DOCXMD" },
-      { "command": "docxmd.exportDocx", "title": "DOCXMD: Export to Word (.docx)", "category": "DOCXMD" }
+      {
+        "command": "docxmd.openWith",
+        "title": "DOCXMD: Open in DOCXMD Editor",
+        "category": "DOCXMD"
+      },
+      {
+        "command": "docxmd.exportDocx",
+        "title": "DOCXMD: Export to Word (.docx)",
+        "category": "DOCXMD"
+      },
+      {
+        "command": "docxmd.importDocx",
+        "title": "DOCXMD: Import Word (.docx) to Markdown",
+        "category": "DOCXMD"
+      }
     ],
     "menus": {
       "editor/title": [
-        { "command": "docxmd.exportDocx", "when": "activeCustomEditorId == docxmd.editor", "group": "navigation" }
+        {
+          "command": "docxmd.exportDocx",
+          "when": "activeCustomEditorId == docxmd.editor",
+          "group": "navigation"
+        }
       ],
       "explorer/context": [
-        { "command": "docxmd.openWith", "when": "resourceExtname == .md || resourceExtname == .markdown", "group": "navigation" }
+        {
+          "command": "docxmd.openWith",
+          "when": "resourceExtname == .md || resourceExtname == .markdown",
+          "group": "navigation"
+        },
+        {
+          "command": "docxmd.importDocx",
+          "when": "resourceExtname == .docx",
+          "group": "navigation"
+        }
       ]
     }
   }

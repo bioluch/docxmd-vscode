@@ -49,6 +49,32 @@ function deeplRequest(texts, target, source, key) {
   });
 }
 let activePanel = null; // the most recently focused DOCXMD editor panel (for the export command)
+// .docx files waiting to be converted by the webview of their target .md (uri → base64)
+const pendingImports = new Map();
+
+// Word → Markdown: pick a .docx, choose the .md to create, then let the DOCXMD
+// webview convert it (mammoth + table formatting + turndown, as in the PWA).
+async function importDocx(uri) {
+  try {
+    let src = uri;
+    if (!src) {
+      const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { "Word document": ["docx"] }, openLabel: "Import to Markdown" });
+      if (!picked || !picked.length) return;
+      src = picked[0];
+    }
+    const bytes = await vscode.workspace.fs.readFile(src);
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: src.with({ path: src.path.replace(/\.docx$/i, "") + ".md" }),
+      filters: { "Markdown": ["md"] }, saveLabel: "Create Markdown"
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, new Uint8Array(0));
+    pendingImports.set(target.toString(), Buffer.from(bytes).toString("base64"));
+    await vscode.commands.executeCommand("vscode.openWith", target, VIEW_TYPE);
+  } catch (e) {
+    vscode.window.showErrorMessage("DOCXMD import failed: " + e.message);
+  }
+}
 
 function activate(context) {
   const provider = new DocxmdEditorProvider(context);
@@ -67,6 +93,9 @@ function activate(context) {
       else vscode.window.showInformationMessage("Open a Markdown file first.");
     })
   );
+
+  // Import a Word document as Markdown (palette / explorer context on .docx)
+  context.subscriptions.push(vscode.commands.registerCommand("docxmd.importDocx", (uri) => importDocx(uri)));
 
   // Ask the active DOCXMD editor to export to .docx
   context.subscriptions.push(
@@ -132,7 +161,18 @@ class DocxmdEditorProvider {
 
     webview.onDidReceiveMessage((msg) => {
       if (!msg) return;
-      if (msg.type === "ready") postUpdate();
+      if (msg.type === "ready") {
+        postUpdate();
+        const key = document.uri.toString();
+        if (pendingImports.has(key)) {
+          webview.postMessage({ type: "importDocx", dataBase64: pendingImports.get(key) });
+          pendingImports.delete(key);
+        }
+      }
+      else if (msg.type === "imported") {
+        Promise.resolve(applyEdit(String(msg.text || ""))).then(() => document.save()).then(() =>
+          vscode.window.showInformationMessage("Imported Word document → " + path.basename(document.uri.fsPath)));
+      }
       else if (msg.type === "edit") applyEdit(msg.text);
       else if (msg.type === "saveDocx") saveDocx(msg.dataBase64, msg.name);
       else if (msg.type === "info") vscode.window.showInformationMessage(msg.text);
@@ -275,6 +315,10 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "highlight.min.js")}"></script>
   <script src="${v("vendor", "docx.umd.js")}"></script>
   <script src="${v("md2docx.js")}"></script>
+  <script src="${v("docxfmt.js")}"></script>
+  <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
+  <script src="${v("vendor", "turndown.min.js")}"></script>
+  <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>
   <script src="${v("translate.js")}"></script>
   <script src="${v("vendor", "katex.min.js")}"></script>
   <script src="${v("webview.js")}"></script>

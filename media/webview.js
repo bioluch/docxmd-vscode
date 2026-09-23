@@ -28,6 +28,9 @@
     const i = mathStore.length; mathStore.push(html);
     return display ? '<div class="katex-ph" data-k="' + i + '"></div>' : '<span class="katex-ph" data-k="' + i + '"></span>';
   }
+  // $…$ inline math (Pandoc/Typora rules): no space after the opening $, none before
+  // the closing $, and no digit right after it — so "$5 and $10" stays plain text.
+  const INLINE_DOLLAR = /^\$(?!\s)((?:\\\$|[^$\n])+?)(?<![\s\\])\$(?!\d)/;
   if (window.marked && window.katex) {
     marked.use({ extensions: [
       { name: "mathBlock", level: "block",
@@ -35,11 +38,13 @@
         tokenizer(src) { const m = /^\\\[([\s\S]+?)\\\]/.exec(src) || /^\$\$([\s\S]+?)\$\$/.exec(src); if (m) return { type: "mathBlock", raw: m[0], text: m[1] }; },
         renderer(t) { const ph = mathPlaceholder(t.text, true); return ph != null ? ph : "<pre>" + escapeHtml(t.raw) + "</pre>"; } },
       { name: "mathInline", level: "inline",
-        start(src) { const m = src.match(/\\\(/); return m ? m.index : undefined; },
-        tokenizer(src) { const m = /^\\\(([\s\S]+?)\\\)/.exec(src); if (m) return { type: "mathInline", raw: m[0], text: m[1] }; },
+        start(src) { const m = src.match(/\\\(|(?<!\\)\$(?=\S)/); return m ? m.index : undefined; },
+        tokenizer(src) { const m = /^\\\(([\s\S]+?)\\\)/.exec(src) || INLINE_DOLLAR.exec(src); if (m) return { type: "mathInline", raw: m[0], text: m[1] }; },
         renderer(t) { const ph = mathPlaceholder(t.text, false); return ph != null ? ph : escapeHtml(t.raw); } }
     ] });
   }
+  // :::red … ::: colour boxes (shared definition in md2docx.js)
+  if (window.marked && window.MD2DOCX && MD2DOCX.colorBoxExtension) marked.use({ extensions: [MD2DOCX.colorBoxExtension()] });
 
   /* ---------- preview ---------- */
   function render() {
@@ -83,6 +88,8 @@
         applying = false;
         render();
       }
+    } else if (msg.type === "importDocx") {
+      importDocx(msg.dataBase64);
     } else if (msg.type === "requestExport") {
       exportDocx();
     } else if (msg.type === "deeplResult") {
@@ -413,7 +420,8 @@
     }
     const btn = $("#exportBtn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
     try {
-      const blob = await window.MD2DOCX.toBlob(md, {});
+      const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+      const blob = await window.MD2DOCX.toBlob(md, { quoteColor: accent });
       const buf = await blob.arrayBuffer();
       vscode.postMessage({ type: "saveDocx", dataBase64: abToB64(buf) });
     } catch (e) {
@@ -427,5 +435,41 @@
   setTheme(st.theme || "dark");
   setMode(st.mode || "split");
   render();
+  /* ---------- Word (.docx) → Markdown (same pipeline as the PWA) ---------- */
+  // Flatten block elements inside table cells so GFM tables import on one line
+  function cleanDocxHtml(html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    tpl.content.querySelectorAll("td p, th p").forEach((p) => {
+      const table = p.closest("table");
+      if (table && table.hasAttribute("data-docxmd-quote")) return; // becomes a blockquote
+      const cell = p.parentNode;
+      if (p.previousElementSibling) cell.insertBefore(table && table.hasAttribute("data-docxmd-html") ? document.createElement("br") : document.createTextNode(" "), p);
+      while (p.firstChild) cell.insertBefore(p.firstChild, p);
+      p.remove();
+    });
+    return tpl.innerHTML;
+  }
+  async function importDocx(b64) {
+    try {
+      if (!window.mammoth || !window.TurndownService) throw new Error("import libraries failed to load");
+      const bin = atob(b64); const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const ab = u8.buffer;
+      const result = await mammoth.convertToHtml({ arrayBuffer: ab },
+        { styleMap: ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"] });
+      const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*", strongDelimiter: "**", hr: "---" });
+      if (window.turndownPluginGfm) td.use(window.turndownPluginGfm.gfm);
+      td.keep(["sub", "sup"]);
+      let html = result.value || "";
+      if (window.DOCXFMT) { DOCXFMT.tableRule(td); html = DOCXFMT.apply(html, await DOCXFMT.extract(ab)); }
+      const md = td.turndown(cleanDocxHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      ta.value = md; render();
+      vscode.postMessage({ type: "imported", text: md });
+    } catch (e) {
+      vscode.postMessage({ type: "error", text: "DOCX import failed: " + (e && e.message) });
+    }
+  }
+
   vscode.postMessage({ type: "ready" });
 })();

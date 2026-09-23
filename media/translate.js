@@ -67,6 +67,8 @@
       const fm = line.match(/^\s*(```+|~~~+)/);
       if (fm) { fence = fm[1][0]; out[i] = line; continue; }
       if (!line.trim()) { out[i] = line; continue; }
+      // colour-box fences  :::red … :::  stay verbatim
+      if (/^\s*:::/.test(line)) { out[i] = line; continue; }
       // table separator row  | --- | :--: |
       if (/-{2,}/.test(line) && /^[\s|:\-]+$/.test(line)) { out[i] = line; continue; }
       // table data row (starts with optional spaces then |)
@@ -98,14 +100,6 @@
     const CH = 40, res = [];
     for (let i = 0; i < texts.length; i += CH) {
       const chunk = texts.slice(i, i + CH);
-      // VS Code webview: the extension host performs the DeepL call (the webview
-      // can't reach DeepL directly). Fall back to the PWA same-origin proxy.
-      if (global.__deeplTransport) {
-        const arr2 = await global.__deeplTransport(chunk, DEEPL[target], source ? DEEPL[source] : undefined);
-        arr2.forEach((t) => res.push(typeof t === "string" ? t : t.text));
-        if (onProgress) onProgress((i + chunk.length) / texts.length);
-        continue;
-      }
       const r = await fetch("api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
