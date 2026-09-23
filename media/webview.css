@@ -65,6 +65,14 @@ body {
 .find-backdrop mark { color: transparent; border-radius: 3px; padding: 0; }
 .find-backdrop mark.find-hit { background: var(--warning); }
 .find-backdrop mark.find-hit.find-current { background: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.find-backdrop .img-data {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 45%, transparent);
+}
+[data-theme="white"] .find-backdrop .img-data { background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.find-backdrop .img-data mark.find-hit { background: var(--warning); }
+.find-backdrop .img-data mark.find-hit.find-current { background: var(--accent); }
 #preview { flex: 1 1 50%; min-width: 0; height: 100%; overflow: auto; padding: 1.2rem 1.6rem; }
 .mode-source #preview { display: none; }
 .mode-source .pane-editor { flex-basis: 100%; }
@@ -125,8 +133,58 @@ body {
 .markdown-body code { font-family: ui-monospace, Consolas, monospace; background: var(--code-bg); color: var(--code-text); padding: .15em .4em; border-radius: 5px; font-size: .88em; }
 .markdown-body pre { background: var(--code-bg); border-radius: 10px; padding: 1rem 1.1rem; overflow: auto; margin: 0 0 1em; box-shadow: inset 3px 3px 8px var(--shadow-dark), inset -3px -3px 8px var(--shadow-light); }
 .markdown-body pre code { background: none; padding: 0; font-size: .85em; }
-.markdown-body table { border-collapse: collapse; margin: 0 0 1em; width: 100%; display: block; overflow: auto; }
-.markdown-body th, .markdown-body td { border: 1px solid var(--border-subtle); padding: .5em .8em; }
+.markdown-body .tbl-wrap { margin: 0 0 1em; max-width: 100%; }
+.markdown-body .tbl-wrap.scroll { overflow-x: auto; }
+.markdown-body table { border-collapse: separate; border-spacing: 0; margin: 0 0 1em; width: auto; max-width: 100%; border: 1px solid var(--border-subtle); border-radius: 10px; }
+.markdown-body .tbl-wrap > table { margin: 0; }
+.markdown-body th, .markdown-body td { border: 0; border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); padding: .5em .8em; vertical-align: top; }
+.markdown-body tr > :last-child { border-right: 0; }
+.markdown-body tbody tr:last-child > * { border-bottom: 0; }
 .markdown-body th { background: var(--bg-card); font-weight: 700; }
+.markdown-body thead th { position: sticky; top: 0; z-index: 1; }
+.markdown-body tr:first-child > :first-child { border-top-left-radius: 9px; }
+.markdown-body tr:first-child > :last-child { border-top-right-radius: 9px; }
+.markdown-body tr:last-child > :first-child { border-bottom-left-radius: 9px; }
+.markdown-body tr:last-child > :last-child { border-bottom-right-radius: 9px; }
+.markdown-body thead + tbody tr:first-child > * { border-radius: 0; }
 .markdown-body tr:nth-child(2n) td { background: var(--bg-card); }
+.markdown-body tbody tr:hover td:not([style]) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.markdown-body .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.markdown-body .tbl-full table { width: 100%; }
+.markdown-body .tbl-compact th, .markdown-body .tbl-compact td { padding: .2em .5em; font-size: .88em; }
+.markdown-body figure.fig { margin: 1.2em 0; text-align: center; }
+.markdown-body figure.fig img { max-width: 100%; }
+.markdown-body figcaption, .markdown-body .tbl-caption { font-size: .92em; color: var(--text-muted); }
+.markdown-body figcaption { margin-top: .45em; }
+.markdown-body .tbl-caption { margin: 1em 0 .35em; }
+.markdown-body figcaption strong, .markdown-body .tbl-caption strong { color: var(--text-main); }
+.markdown-body a.xref { border-bottom: 1px dotted currentColor; }
+.markdown-body .xref-missing { color: var(--danger); }
+.markdown-body sup.fn-ref a { text-decoration: none; font-weight: 700; padding: 0 .1em; }
+.markdown-body .footnotes { margin-top: 2.2em; padding-top: .8em; border-top: 1px solid var(--border-subtle); font-size: .9em; color: var(--text-muted); }
+.markdown-body .fn-back { text-decoration: none; margin-left: .2em; }
+.markdown-body nav.toc { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; padding: .8em 1.2em; margin: 0 0 1.4em; }
+.markdown-body nav.toc ul { list-style: none; margin: 0; padding: 0; }
+.markdown-body nav.toc a { color: var(--text-main); }
+.markdown-body .toc-title { font-weight: 700; margin: 0 0 .4em; }
+.markdown-body .toc-l2 { padding-left: 1.2em; }
+.markdown-body .toc-l3 { padding-left: 2.4em; font-size: .95em; }
+.markdown-body .hnum { color: var(--accent); margin-right: .15em; }
+.markdown-body blockquote.callout { color: var(--text-main); padding: .7em 1.1em; border-radius: 0 10px 10px 0; }
+.markdown-body .callout-title { font-weight: 700; margin: 0 0 .35em; color: var(--text-main); }
+.markdown-body .callout > :last-child { margin-bottom: 0; }
+.popover { position: fixed; z-index: 70; max-width: min(420px, calc(100vw - 16px)); max-height: 70vh; overflow: auto; background: var(--bg-base); color: var(--text-main); border: 1px solid var(--border-subtle); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35); padding: .6rem .7rem; }
+.popover .pop-head { display: flex; align-items: center; justify-content: space-between; gap: .8rem; margin-bottom: .4rem; font-size: .85rem; }
+.popover .pop-opt { font-size: .78rem; color: var(--text-muted); display: flex; align-items: center; gap: .3rem; cursor: pointer; }
+.popover .sym-group > span { display: block; font-size: .72rem; color: var(--text-muted); margin: .35rem 0 .2rem; text-transform: uppercase; letter-spacing: .04em; }
+.popover .sym-row { display: flex; flex-wrap: wrap; gap: .25rem; }
+.popover .sym, .popover .pop-item { font: inherit; color: inherit; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 7px; cursor: pointer; }
+.popover .sym { min-width: 32px; height: 32px; padding: 0 .35rem; font-size: 1rem; }
+.popover .sym:hover, .popover .pop-item:hover { border-color: var(--accent); color: var(--accent); }
+.popover .pop-item { display: flex; align-items: center; gap: .45rem; width: 100%; text-align: left; padding: .4rem .55rem; margin: .2rem 0; font-size: .88rem; }
+.popover .pop-item i { width: 4px; align-self: stretch; border-radius: 2px; flex: 0 0 auto; }
+.popover .pop-item code { margin-left: auto; font-size: .75rem; color: var(--text-muted); }
+.tb sup, .tb sub { font-size: .65em; line-height: 1; vertical-align: baseline; position: relative; margin-left: 1px; }
+.tb sup { top: -.5em; }
+.tb sub { top: .45em; }
 .markdown-body img { max-width: 100%; border-radius: 8px; }
