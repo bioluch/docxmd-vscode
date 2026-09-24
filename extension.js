@@ -7,6 +7,71 @@ const path = require("path");
 const https = require("https");
 
 const VIEW_TYPE = "docxmd.editor";
+// Notation clean-up rules — the same module as the web app (media/sciclean.js)
+const SciClean = require("./media/sciclean.js").DOCXMDSciClean;
+let activeDocument = null;      // the document of the DOCXMD editor in focus
+
+// ---- pasted / dropped images → <folder of the .md>/images/image-001.png ----
+const IMG_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/svg+xml": "svg", "image/bmp": "bmp" };
+async function saveImageNextTo(document, dataBase64, mime, name) {
+  if (document.uri.scheme !== "file" && document.uri.scheme !== "vscode-remote") return null;   // untitled → embed
+  const mode = vscode.workspace.getConfiguration("docxmd").get("pastedImages", "folder");
+  if (mode === "embed") return null;
+  const docDir = vscode.Uri.joinPath(document.uri, "..");
+  const imgDir = vscode.Uri.joinPath(docDir, "images");
+  await vscode.workspace.fs.createDirectory(imgDir);
+  let taken = new Set();
+  try { taken = new Set((await vscode.workspace.fs.readDirectory(imgDir)).map(([n]) => n.toLowerCase())); } catch (e) {}
+  const ext = IMG_EXT[mime] || (String(name || "").split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+  let n = 1, file;
+  do { file = "image-" + String(n++).padStart(3, "0") + "." + ext; } while (taken.has(file));
+  await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(imgDir, file), new Uint8Array(Buffer.from(String(dataBase64), "base64")));
+  return "images/" + file;
+}
+
+// ---- DOCXMD: Clean up scientific notation (QuickPick review, one undoable edit) ----
+async function cleanNotation() {
+  const doc = activeDocument || (vscode.window.activeTextEditor && vscode.window.activeTextEditor.document);
+  if (!doc || !/\.(md|markdown)$/i.test(doc.fileName || "") && doc.languageId !== "markdown") {
+    vscode.window.showInformationMessage("Open a Markdown document first."); return;
+  }
+  const text = doc.getText();
+  const fmt = await vscode.window.showQuickPick([
+    { label: "<sub> / <sup> tags", description: "recommended — real indices in Word", value: "html" },
+    { label: "Unicode ₂ ²", description: "where Unicode has the character; otherwise tags", value: "unicode" }
+  ], { title: "DOCXMD: Clean up scientific notation — indices as", ignoreFocusOut: true });
+  if (!fmt) return;
+  const cfg = vscode.workspace.getConfiguration("docxmd");
+  const res = SciClean.scan(text, { format: fmt.value, dict: cfg.get("notationDictionary") || SciClean.DEFAULT_DICT });
+  const groups = new Map();
+  res.changes.forEach((c) => {
+    const k = c.rule + "\u0000" + c.from + "\u0000" + c.to;
+    if (!groups.has(k)) groups.set(k, { rule: c.rule, from: c.from, to: c.to, items: [] });
+    groups.get(k).items.push(c);
+  });
+  const RULE = { math: "formula $…$", script: "index _{} ^{}", dict: "dictionary", units: "units" };
+  const items = Array.from(groups.values()).map((g) => ({
+    label: g.from.replace(/\n/g, " ") + "  →  " + g.to.replace(/\u00A0/g, "·"),
+    description: RULE[g.rule] + (g.items.length > 1 ? "  ×" + g.items.length : ""),
+    detail: "line " + (doc.positionAt(g.items[0].start).line + 1), picked: true, g
+  }));
+  if (!items.length) {
+    vscode.window.showInformationMessage("Nothing to clean up." + (res.skipped ? " " + res.skipped + " complex formulas are left unchanged." : "")); return;
+  }
+  const chosen = await vscode.window.showQuickPick(items, {
+    canPickMany: true, ignoreFocusOut: true, matchOnDescription: true,
+    title: "DOCXMD: Clean up scientific notation — " + res.changes.length + " changes" + (res.skipped ? " (" + res.skipped + " complex formulas left unchanged)" : ""),
+    placeHolder: "Untick what should stay as it is, then press Enter"
+  });
+  if (!chosen || !chosen.length) return;
+  if (doc.getText() !== text) { vscode.window.showWarningMessage("The document changed — run the command again."); return; }
+  const list = chosen.flatMap((it) => it.g.items).sort((a, b) => a.start - b.start);
+  const edit = new vscode.WorkspaceEdit();
+  let last = -1;
+  list.forEach((c) => { if (c.start < last) return; edit.replace(doc.uri, new vscode.Range(doc.positionAt(c.start), doc.positionAt(c.end)), SciClean.insertText(c)); last = c.end; });
+  await vscode.workspace.applyEdit(edit);
+  vscode.window.showInformationMessage("Applied " + list.length + " changes. Undo (Ctrl+Z) restores the text.");
+}
 
 // ---- DeepL translation (performed in the host; the webview can't reach DeepL) ----
 let _deeplKey = null;
@@ -134,6 +199,7 @@ function activate(context) {
 
   // Import a Word document as Markdown (palette / explorer context on .docx)
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.importDocx", (uri) => importDocx(uri)));
+  context.subscriptions.push(vscode.commands.registerCommand("docxmd.cleanNotation", () => cleanNotation()));
 
   // Ask the active DOCXMD editor to export to .docx
   context.subscriptions.push(
@@ -149,16 +215,21 @@ class DocxmdEditorProvider {
 
   resolveCustomTextEditor(document, webviewPanel) {
     const webview = webviewPanel.webview;
+    // the document's folder (and the workspace) can be read by the preview: relative images
+    const docDir = vscode.Uri.joinPath(document.uri, "..");
     webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")]
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media"), docDir]
+        .concat((vscode.workspace.workspaceFolders || []).map((f) => f.uri))
     };
     webview.html = this._html(webview);
+    const docBase = document.uri.scheme === "untitled" ? "" : webview.asWebviewUri(docDir).toString().replace(/\/?$/, "/");
 
     activePanel = webviewPanel;
+    activeDocument = document;
     let fromWebview = false;
 
-    const postUpdate = () => webview.postMessage({ type: "update", text: document.getText() });
+    const postUpdate = () => webview.postMessage({ type: "update", text: document.getText(), base: docBase });
 
     const applyEdit = (text) => {
       if (text === document.getText()) return;
@@ -194,7 +265,7 @@ class DocxmdEditorProvider {
     });
 
     const viewSub = webviewPanel.onDidChangeViewState(() => {
-      if (webviewPanel.active) activePanel = webviewPanel;
+      if (webviewPanel.active) { activePanel = webviewPanel; activeDocument = document; }
     });
 
     webview.onDidReceiveMessage((msg) => {
@@ -214,6 +285,12 @@ class DocxmdEditorProvider {
       else if (msg.type === "edit") applyEdit(msg.text);
       else if (msg.type === "saveDocx") saveDocx(msg.dataBase64, msg.name);
       else if (msg.type === "info") vscode.window.showInformationMessage(msg.text);
+      else if (msg.type === "saveImage") {
+        saveImageNextTo(document, msg.dataBase64, msg.mime, msg.name)
+          .then((p) => webview.postMessage({ type: "imageSaved", id: msg.id, path: p }))
+          .catch((e) => { webview.postMessage({ type: "imageSaved", id: msg.id, path: null }); vscode.window.showWarningMessage("Could not save the image next to the document (" + e.message + ") — it was embedded instead."); });
+      }
+      else if (msg.type === "cleanNotation") cleanNotation();
       else if (msg.type === "error") vscode.window.showErrorMessage(msg.text);
       else if (msg.type === "openExternal" && /^https:\/\//.test(msg.url || "")) vscode.env.openExternal(vscode.Uri.parse(msg.url));
       else if (msg.type === "deepl") {
@@ -264,7 +341,7 @@ class DocxmdEditorProvider {
     webviewPanel.onDidDispose(() => {
       changeSub.dispose();
       viewSub.dispose();
-      if (activePanel === webviewPanel) activePanel = null;
+      if (activePanel === webviewPanel) { activePanel = null; activeDocument = null; }
     });
   }
 
@@ -279,7 +356,7 @@ class DocxmdEditorProvider {
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${csp} https: data: blob:; style-src ${csp} 'unsafe-inline'; font-src ${csp}; script-src ${csp} 'unsafe-eval';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${csp} https: data: blob:; connect-src ${csp} https: data: blob:; style-src ${csp} 'unsafe-inline'; font-src ${csp}; script-src ${csp} 'unsafe-eval';">
 <link rel="stylesheet" href="${v("themes.css")}" />
 <link id="hljsLight" rel="stylesheet" href="${v("vendor", "hljs-github.css")}" disabled />
 <link id="hljsDark" rel="stylesheet" href="${v("vendor", "hljs-github-dark.css")}" />
@@ -294,7 +371,9 @@ class DocxmdEditorProvider {
       <button class="tb" data-cmd="strike"><s>S</s></button>
       <button class="tb" data-cmd="sup" title="Superscript (Ctrl+.)">x<sup>2</sup></button>
       <button class="tb" data-cmd="sub" title="Subscript (Ctrl+,)">x<sub>2</sub></button>
+      <button class="tb" data-cmd="highlight" title="Highlight ==text== (Ctrl+Shift+H)"><span style="background:#fff176;color:#1a1a1a;padding:0 .2em;border-radius:3px;font-weight:700;font-size:.8rem">ab</span></button>
       <button class="tb" data-cmd="symbols" title="Symbols">&Omega;</button>
+      <button class="tb" data-cmd="cleanNotation" title="Clean up scientific notation (indices, formulas, units)"><svg viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6.5L4.6 18.2A1.8 1.8 0 0 0 6.1 21h11.8a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 14h9"/></svg></button>
       <span class="sep"></span>
       <button class="tb" data-cmd="h1">H1</button>
       <button class="tb" data-cmd="h2">H2</button>

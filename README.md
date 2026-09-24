@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.1.12:** pasted / dropped **images are saved to `images/image-001.png` next to the `.md`** (relative link instead of base64) and relative images now show in the preview and export to Word; **Clean up scientific notation** (`T _ { Core }`, `$R^2$`, `CO2`, `36.7°C` → T<sub>Core</sub>, R², CO₂, 36.7 °C) with a review list; **highlights** `==text==` / `==red:text==` (`Ctrl+Shift+H`); **YAML front matter → Word header, footer, page numbers and document properties**. See [What's new in 0.1.12](#whats-new-in-0112).
+>
 > **New in 0.1.11:** **resize images with the mouse** — hover an image in the preview and drag the handle at its corner; the width is written into the Markdown (`{width=60%}`) and carried into the exported `.docx`. Importing a `.docx` now keeps each picture's size from Word.
 >
 > **New in 0.1.10:** when the DeepL quota is used up (or the key is rejected) a dialog lets you **enter another API key** and the translation continues; new command **DOCXMD: Set DeepL API key**.
@@ -14,6 +16,23 @@ Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and impor
 
 DOCXMD provides a dedicated Markdown editor with live preview, formatting tools, multiple themes, and direct Word document export.
 
+![DOCXMD — Markdown source and live preview side by side](https://docxmd.pp.ua/help/img/overview.png)
+
+## Screenshots
+
+The extension's editor uses the same interface, themes and converter as the [DOCXMD web app](https://docxmd.pp.ua/); these screenshots come from its illustrated guide.
+
+| | |
+|---|---|
+| ![Formatting toolbar](https://docxmd.pp.ua/help/img/toolbar.png) | ![Find highlights every match in the source and the preview](https://docxmd.pp.ua/help/img/find.png) |
+| **Formatting toolbar** — bold, x² / x₂, Ω symbols, headings, callouts, lists, links, images, tables, alignment | **Find & replace** — every match highlighted in the source and the preview |
+| ![Callout blocks](https://docxmd.pp.ua/help/img/callouts_en.png) | ![Colour boxes](https://docxmd.pp.ua/help/img/boxes_en.png) |
+| **Callout blocks** `:::warning` / `> [!NOTE]` — kept as tinted boxes in Word | **Colour boxes** `:::red … :::` |
+| ![Footnotes, numbered figures and tables, table of contents](https://docxmd.pp.ua/help/img/structure_en.png) | ![Styling Markdown with HTML](https://docxmd.pp.ua/help/img/styling.png) |
+| **Footnotes, numbered figures & tables, cross-references, table of contents** | **HTML styling** — the source on the left, the result on the right |
+| ![Translation dialog](https://docxmd.pp.ua/help/img/translate.png) | ![Themes and languages](https://docxmd.pp.ua/help/img/themes.png) |
+| **Translate** into English · Українська · Español · 中文 | **4 themes · 4 interface languages** |
+
 Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully independent; this extension includes local copies of its converter and required libraries in `media/`.
 
 ## Features
@@ -22,7 +41,10 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - Live preview with synchronized Markdown source and rendered document.
 - Formatting toolbar for common Markdown editing operations.
 - **Text & image alignment** (left / center / right / justify) — renders in the preview and is honoured on DOCX export.
-- **Insert images** by pasting (`Ctrl+V`) or dragging a file onto the editor — embedded inline as a data-URI.
+- **Insert images** by pasting (`Ctrl+V`) or dragging a file onto the editor — saved to `images/` next to the document with a relative link (or embedded as a data-URI: setting `docxmd.pastedImages`, and always for untitled documents).
+- **Clean up scientific notation** — MinerU/LaTeX leftovers, chemical formulas and units, reviewed in a list before anything changes.
+- **Highlights** `==text==`, `==red:text==` — Word text highlighting in DOCX.
+- **Front matter** — `header`, `footer`, `page-numbers`, `title`, `author` become a real Word header / footer, PAGE / NUMPAGES fields and document properties.
 - **Find & replace** (`Ctrl+F`) with every match highlighted in both the source and the preview.
 - **Status bar** with live word / character / line / reading-time counts, a scroll-position indicator and quick navigation (start / end / click-to-jump).
 - **LaTeX math** — inline `\(…\)` or `$…$` and display `\[…\]` / `$$…$$` formulas rendered with KaTeX (offline), and exported to Word as **native editable equations** (OMML).
@@ -94,7 +116,30 @@ Press `Ctrl+F` (or the 🔍 button) to open the find bar. Type a query and press
 
 ### Alignment & images
 
-Use the alignment buttons in the toolbar to wrap the current block in `<div align="…">` (left / center / right / justify). Paste an image from the clipboard with `Ctrl+V`, or drag an image file onto the editor — it is embedded inline as a data-URI, so the document stays self-contained.
+Use the alignment buttons in the toolbar to wrap the current block in `<div align="…">` (left / center / right / justify). Paste an image from the clipboard with `Ctrl+V`, or drag an image file onto the editor — it is written to `images/image-001.png` (the next free number) in the folder of the `.md` and a relative link `![…](images/image-001.png)` is inserted. Set `docxmd.pastedImages` to `embed` to keep the old behaviour (a base64 data-URI inside the text); untitled documents always embed.
+
+### Clean up scientific notation
+
+Run **DOCXMD: Clean up scientific notation** (or the flask button in the toolbar). Choose the output — `<sub>/<sup>` tags (recommended, real indices in Word) or Unicode ₂ ² — and review the proposed changes: identical changes are grouped (×N), untick what should stay. The rules: simple formulas `$T_{Core}$`, `$\Delta$`; MinerU index artefacts `T _ { Core }`, `R ^ { 2 }`, `R^2`; a dictionary (`CO2`, `SpO2`, `H2O`, `HbA1c`, `TCore`… — edit it in the `docxmd.notationDictionary` setting); a space between a number and its unit (`36.7°C` → `36.7 °C`). Code, `$$…$$`, links, URLs, HTML and front matter are never touched; complex formulas (`\frac`, roots, sums, nested indices) stay as they are. The whole clean-up is one edit — one `Ctrl+Z` restores the text.
+
+### Highlights and front matter
+
+`==important==` is highlighted in yellow; `==red:…==`, `==green:…==`, `==blue:…==`, `==pink:…==`, `==gray:…==` pick a colour (toolbar button or `Ctrl+Shift+H`). In Word they are real text highlights, and importing a `.docx` brings them back.
+
+A YAML block at the very top of the file controls the Word document:
+
+```yaml
+---
+title: Non-invasive biomarkers
+author: KOLIBRI MEDICAL TECHNOLOGY
+lang: en
+header: KOLIBRI MEDICAL TECHNOLOGY — {title}
+footer: Confidential • 2026
+page-numbers: "Page {n} of {N}"
+---
+```
+
+`header` / `footer` become the Word header and footer, `{n}` / `{N}` the PAGE / NUMPAGES fields (`page-numbers: true` prints just the number), `title` / `author` / `subject` / `keywords` the document properties, and `lang` the language of the "Figure / Table" words. The preview shows the block as a compact card. Importing a `.docx` turns its header, footer and page numbers back into front matter.
 
 ### LaTeX math
 
@@ -109,6 +154,15 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.12
+
+- **Images next to the document:** pasting (`Ctrl+V`) or dropping an image writes it to `images/image-001.png` (next free number) in the `.md`'s folder and inserts a relative link instead of base64. Setting `docxmd.pastedImages` = `folder` (default) | `embed`; untitled documents embed.
+- **Relative images work:** `![](images/pic.png)` and `<img src="…">` with relative paths now display in the preview (the document's folder and the workspace are readable by the webview) and are embedded in the exported `.docx`.
+- **DOCXMD: Clean up scientific notation** — a new command and toolbar button; review list (QuickPick) with grouped changes, one undoable edit; dictionary in the `docxmd.notationDictionary` setting. Shares its rules (`media/sciclean.js`) with the web app.
+- **Highlights** `==text==` / `==red:text==` (toolbar button, `Ctrl+Shift+H`) → Word highlighting; imported back from `.docx`.
+- **YAML front matter** → Word header / footer, PAGE / NUMPAGES page numbers (`page-numbers: "Page {n} of {N}"`), document properties; `lang:` sets the caption words. Shown as a card in the preview; `.docx` import restores it. Translation keeps the keys and translates only title / header / footer values.
+- Exporting data-URI images no longer depends on the webview's fetch policy (`connect-src` added to the CSP).
 
 ## What's new in 0.1.11
 

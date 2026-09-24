@@ -402,6 +402,16 @@
   const mdWidth = (w) => (/%$/.test(w) ? w : w + "px");
   const noteId = (href) => { const m = /#(footnote|endnote)-(\d+)$/.exec(href || ""); return m ? (m[1] === "endnote" ? "e" : "") + m[2] : null; };
   function structureRules(td) {
+    // Word highlight (mammoth styleMap → <mark class="hl-…">) → ==text== / ==red:text==
+    td.addRule("docxmdMark", {
+      filter: (n) => n.nodeName === "MARK",
+      replacement: (content, n) => {
+        if (!content.trim()) return content;
+        const c = (/\bhl-([a-z]+)/.exec(n.getAttribute("class") || "") || [])[1] || "yellow";
+        const lead = content.match(/^\s*/)[0], trail = content.match(/\s*$/)[0];
+        return lead + "==" + (c !== "yellow" ? c + ":" : "") + content.trim() + "==" + trail;
+      }
+    });
     td.addRule("docxmdNumbered", { filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-numbered"), replacement: () => "\n\n<!-- docxmd: numbered-headings -->\n\n" });
     td.addRule("docxmdToc", { filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-toc"), replacement: () => "\n\n[TOC]\n\n" });
     td.addRule("docxmdSecHeading", {
@@ -488,5 +498,97 @@
     });
   }
 
-  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry };
+  // mammoth style map for Word text highlights (import → <mark class="hl-…">)
+  function highlightStyleMap() {
+    const M = global.MD2DOCX, map = (M && M.HL_FROM_WORD) || {};
+    return Object.keys(map).map((w) => "highlight[color='" + w + "'] => mark.hl-" + map[w]);
+  }
+
+  // ---- header / footer / document properties → YAML front matter -------------
+  const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  // Text of a header/footer part: PAGE → {n}, NUMPAGES → {N}, tabs kept as \t.
+  function partText(xml) {
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    const paras = [];
+    for (const p of Array.from(doc.getElementsByTagNameNS(W, "p"))) {
+      let out = "", depth = 0, skip = false;
+      const field = (instr) => (/\bNUMPAGES\b/.test(instr) ? "{N}" : /\bPAGE\b/.test(instr) ? "{n}" : "");
+      (function walk(n) {
+        for (const c of Array.from(n.childNodes)) {
+          if (c.nodeType !== 1) continue;
+          const ln = c.namespaceURI === W ? c.localName : "";
+          if (ln === "fldSimple") { out += field(c.getAttributeNS(W, "instr") || c.getAttribute("w:instr") || ""); continue; }
+          if (ln === "fldChar") {
+            const t = wval(c, "fldCharType");
+            if (t === "begin") depth++;
+            else if (t === "separate") skip = true;
+            else if (t === "end") { depth = Math.max(0, depth - 1); if (!depth) skip = false; }
+            continue;
+          }
+          if (ln === "instrText") { out += field(c.textContent); continue; }
+          if (ln === "t") { if (!skip) out += c.textContent; continue; }
+          if (ln === "tab") { if (!skip && c.parentNode.localName === "r") out += "\t"; continue; }
+          walk(c);
+        }
+      })(p);
+      if (out.trim()) paras.push(out.trim());
+    }
+    return paras.join("\t");   // paragraphs (and table cells) are separate pieces, like tab stops
+  }
+  async function extractMeta(ab, fileBase) {
+    try {
+      if (typeof DOMParser === "undefined") return null;
+      const [docXml, relsXml, coreXml] = await Promise.all([
+        readZipEntry(ab, "word/document.xml"), readZipEntry(ab, "word/_rels/document.xml.rels"), readZipEntry(ab, "docProps/core.xml")]);
+      const meta = {};
+      if (docXml && relsXml) {
+        const doc = new DOMParser().parseFromString(docXml, "application/xml");
+        const rels = new DOMParser().parseFromString(relsXml, "application/xml");
+        const target = (id) => { const r = Array.from(rels.getElementsByTagName("Relationship")).find((x) => x.getAttribute("Id") === id); return r ? "word/" + r.getAttribute("Target").replace(/^\/?word\//, "") : null; };
+        const sects = doc.getElementsByTagNameNS(W, "sectPr");
+        const sect = sects[sects.length - 1];
+        const part = async (kind) => {
+          if (!sect) return "";
+          const refs = kids(sect, kind + "Reference");
+          const ref = refs.find((r) => wval(r, "type") === "default") || refs[0];
+          const id = ref && (ref.getAttributeNS(NS_R, "id") || ref.getAttribute("r:id"));
+          const xml = id && target(id) ? await readZipEntry(ab, target(id)) : null;
+          return xml ? partText(xml) : "";
+        };
+        const split = (txt) => {
+          const pieces = txt.split("\t").map((x) => x.trim()).filter(Boolean);
+          return { text: pieces.filter((x) => !/\{[nN]\}/.test(x)).join(" · "), pages: pieces.filter((x) => /\{[nN]\}/.test(x)).join(" ") };
+        };
+        const h = split(await part("header")), f = split(await part("footer"));
+        if (h.text) meta.header = h.text;
+        if (f.text) meta.footer = f.text;
+        const pages = f.pages || h.pages;
+        if (pages) meta["page-numbers"] = pages === "{n}" ? "true" : pages;
+      }
+      if (!Object.keys(meta).length) return null;   // plain Word properties alone are not worth a front matter
+      if (coreXml) {
+        const core = new DOMParser().parseFromString(coreXml, "application/xml");
+        const get = (tag) => { const e = core.getElementsByTagName(tag)[0]; return e ? e.textContent.trim() : ""; };
+        const title = get("dc:title"), author = get("dc:creator"), subject = get("dc:subject"), keywords = get("cp:keywords");
+        const head = {};
+        if (title && title !== fileBase) head.title = title;
+        if (author && author !== "DOCXMD") head.author = author;
+        if (subject) head.subject = subject;
+        if (keywords) head.keywords = keywords;
+        return Object.assign(head, meta);
+      }
+      return meta;
+    } catch (e) {
+      console.warn("DOCXFMT.extractMeta", e);
+      return null;
+    }
+  }
+  // meta object → "---\nkey: value\n---\n\n" (values quoted when YAML would misread them)
+  function frontMatterText(meta) {
+    const keys = Object.keys(meta || {}); if (!keys.length) return "";
+    const q = (v) => (/^[\w\u0080-\uFFFF][^:#{}\[\]"'\n]*$/.test(v) && !/\s$/.test(v) ? v : '"' + String(v).replace(/(["\\])/g, "\\$1") + '"');
+    return "---\n" + keys.map((k) => k + ": " + q(String(meta[k]))).join("\n") + "\n---\n\n";
+  }
+
+  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry, extractMeta, frontMatterText, highlightStyleMap };
 })(typeof window !== "undefined" ? window : this);

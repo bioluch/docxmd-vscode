@@ -217,6 +217,8 @@
           runs.push(...inlineRuns(tk.tokens, Object.assign({}, style, { italics: true }), imgMap, D)); break;
         case "del":
           runs.push(...inlineRuns(tk.tokens, Object.assign({}, style, { strike: true }), imgMap, D)); break;
+        case "mark":
+          runs.push(...inlineRuns(tk.tokens, Object.assign({}, style, { highlight: HIGHLIGHTS[tk.color] || "yellow" }), imgMap, D)); break;
         case "codespan":
           runs.push(new D.TextRun({
             text: decode(tk.text), font: "Consolas", size: 20,
@@ -295,7 +297,8 @@
   const HTML_FMT = {
     sup: { sup: true, sub: false }, sub: { sub: true, sup: false },
     b: { bold: true }, strong: { bold: true }, i: { italics: true }, em: { italics: true },
-    u: { underline: true }, s: { strike: true }, del: { strike: true }, strike: { strike: true }
+    u: { underline: true }, s: { strike: true }, del: { strike: true }, strike: { strike: true },
+    mark: { highlight: "yellow" }
   };
 
   function mkRun(text, style, D) {
@@ -308,6 +311,7 @@
       superScript: style.sup || undefined,
       size: style.size || undefined,
       subScript: style.sub || undefined,
+      highlight: style.highlight || undefined,
       color: style.color
     });
   }
@@ -504,6 +508,8 @@
     const css = cssProps(el), st = Object.assign({}, style);
     const tag = el.nodeName.toLowerCase();
     if (HTML_FMT[tag]) Object.assign(st, HTML_FMT[tag]);
+    const hl = tag === "mark" && /\bhl-([a-z]+)/.exec(el.getAttribute("class") || "");
+    if (hl && HIGHLIGHTS[hl[1]]) st.highlight = HIGHLIGHTS[hl[1]];
     const c = cssColor(css.color || el.getAttribute("color")); if (c) st.color = c;
     if (/bold|[6-9]00/.test(css["font-weight"] || "")) st.bold = true;
     if (css["font-style"] === "italic") st.italics = true;
@@ -667,8 +673,7 @@
     return CALLOUTS[n] ? n : (CALLOUT_ALIAS[n] || null);
   }
   function calloutTitle(kind) {
-    const L = (global.I18N && global.I18N.lang) || "en";
-    const t = CALLOUTS[kind].title; return t[L] || t.en;
+    const t = CALLOUTS[kind].title; return t[docLang()] || t.en;
   }
   // DOCX import: which callout draws this bar colour (callouts always have a fill)
   function calloutByColor(hex) {
@@ -822,7 +827,10 @@
     toc: { en: "Contents", uk: "Зміст", es: "Contenido", zh: "目录" }
   };
   const uiLang = () => (global.I18N && global.I18N.lang) || "en";
-  const word = (k) => WORDS[k][uiLang()] || WORDS[k].en;
+  // Language of generated words (Figure / Рисунок, callout titles): front matter
+  // `lang:` when it is one of ours, otherwise the interface language.
+  const docLang = () => { const l = String((DOC.meta && DOC.meta.lang) || "").slice(0, 2).toLowerCase(); return WORDS.fig[l] ? l : uiLang(); };
+  const word = (k) => WORDS[k][docLang()] || WORDS[k].en;
   const NUMBERING_RE = /<!--\s*docxmd:\s*numbered-headings\s*-->/i;
   const SEC_ATTR_RE = /[ \t]*\{#sec:([A-Za-z0-9_-]+)\}[ \t]*$/;
   // Word bookmark names: letters, digits, "_" only ("-" → "__", reversed on import)
@@ -837,7 +845,7 @@
     const h = /^#(h-\d+)$/.exec(href || "");
     return h && DOC.headings.some((x) => x.anchor === h[1] && x.linked) ? headingBookmark(h[1]) : null;
   }
-  function emptyDoc() { return { htmlIds: new Set(), figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
+  function emptyDoc() { return { meta: null, htmlIds: new Set(), figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
   let DOC = emptyDoc();
 
   function tokensText(tokens) {
@@ -1050,9 +1058,24 @@
     return {
       extensions: extensions(),
       hooks: {
-        preprocess(md) { DOC = emptyDoc(); return md; },
+        preprocess(md) {
+          DOC = emptyDoc();
+          const fm = parseFrontMatter(md);
+          PRE = { src: fm ? fm.body : md, base: fm ? fm.raw.length : 0, fmLen: fm ? fm.raw.length : 0 };
+          if (!fm) return md;
+          DOC.meta = fm.meta;
+          return fm.body;
+        },
         processAllTokens(tokens) {
+          const meta = DOC.meta;
           DOC = analyzeDoc(tokens);
+          DOC.meta = meta;
+          DOC.blocks = [];
+          if (BLOCK_MARKS && PRE) markBlocks(tokens, PRE.src, PRE.base);
+          if (meta) {
+            tokens.unshift({ type: "frontMatter", raw: "", meta });
+            if (BLOCK_MARKS && PRE) { DOC.blocks.push({ start: 0, end: PRE.fmLen, type: "frontMatter" }); tokens.unshift({ type: "blockMark", raw: "", n: DOC.blocks.length - 1 }); }
+          }
           if (DOC.fnOrder.length) tokens.push({ type: "footnotes", raw: "" });
           return tokens;
         }
@@ -1088,8 +1111,288 @@
     };
   }
 
+  // ---- ==highlight== ------------------------------------------------------
+  // ==text== (yellow) and ==red:text== (colour name right before a colon, no space).
+  // Preview: <mark class="hl hl-red">; DOCX: Word text highlight.
+  const HIGHLIGHTS = {
+    yellow: "yellow", red: "red", green: "green", blue: "cyan", pink: "magenta", gray: "lightGray"
+  };
+  const HL_ALIAS = {
+    grey: "gray", cyan: "blue", magenta: "pink",
+    "жовтий": "yellow", "червоний": "red", "зелений": "green", "синій": "blue", "блакитний": "blue",
+    "рожевий": "pink", "сірий": "gray"
+  };
+  // Word highlight value → our colour name (DOCX import)
+  const HL_FROM_WORD = {
+    yellow: "yellow", darkYellow: "yellow", red: "red", darkRed: "red", green: "green", darkGreen: "green",
+    cyan: "blue", blue: "blue", darkBlue: "blue", darkCyan: "blue", magenta: "pink", darkMagenta: "pink",
+    lightGray: "gray", darkGray: "gray"
+  };
+  function highlightName(name) {
+    const n = String(name || "").trim().toLowerCase();
+    return HIGHLIGHTS[n] ? n : (HL_ALIAS[n] || null);
+  }
+  const MARK_RE = /^==(?![\s=])((?:\\=|[^=\n]|=(?!=))+?)(?<![\s\\])==(?!=)/;
+  function markExtension() {
+    return {
+      name: "mark", level: "inline",
+      start(src) { const i = src.indexOf("=="); return i < 0 ? undefined : i; },
+      tokenizer(src) {
+        const m = MARK_RE.exec(src); if (!m) return undefined;
+        let text = m[1], color = "yellow";
+        const c = /^([A-Za-z\u0400-\u04FF]+):(?!\s)/.exec(text);
+        if (c && highlightName(c[1])) { color = highlightName(c[1]); text = text.slice(c[0].length); }
+        return { type: "mark", raw: m[0], color, text, tokens: this.lexer.inlineTokens(text) };
+      },
+      renderer(t) { return '<mark class="hl hl-' + t.color + '">' + this.parser.parseInline(t.tokens) + "</mark>"; }
+    };
+  }
+
+  // ---- YAML front matter ----------------------------------------------------
+  // ---
+  // title: …            author: …          lang: uk
+  // header: …           footer: …          page-numbers: "Page {n} of {N}"
+  // ---
+  // A small YAML subset: `key: value` (quoted or not), `key:` + "- item" lists.
+  // Anything else between the fences means it is not front matter (a rule + text).
+  const FM_RE = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
+  function fmValue(v) {
+    v = String(v).trim();
+    const q = /^"((?:[^"\\]|\\.)*)"$/.exec(v);
+    if (q) return q[1].replace(/\\(["\\])/g, "$1").replace(/\\n/g, "\n");
+    const s = /^'((?:[^']|'')*)'$/.exec(v);
+    if (s) return s[1].replace(/''/g, "'");
+    return v.replace(/\s+#.*$/, "");
+  }
+  function parseFrontMatter(md) {
+    const m = FM_RE.exec(md || "");
+    if (!m) return null;
+    const meta = {}, order = [];
+    let last = null;
+    for (const line of m[1].split(/\r?\n/)) {
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+      const kv = /^([A-Za-z_][\w-]*)[ \t]*:(?:[ \t]+(.*)|[ \t]*)$/.exec(line);
+      if (kv) {
+        last = kv[1].toLowerCase(); order.push(last);
+        const v = kv[2] == null ? "" : kv[2].trim();
+        const arr = /^\[(.*)\]$/.exec(v);
+        meta[last] = arr ? arr[1].split(",").map(fmValue).filter(Boolean) : fmValue(v);
+        continue;
+      }
+      const item = /^[ \t]+-[ \t]+(.*)$/.exec(line) || /^-[ \t]+(.*)$/.exec(line);
+      if (item && last) { if (!Array.isArray(meta[last])) meta[last] = meta[last] ? [meta[last]] : []; meta[last].push(fmValue(item[1])); continue; }
+      if (/^[ \t]+\S/.test(line) && last && typeof meta[last] === "string") { meta[last] = (meta[last] + " " + line.trim()).trim(); continue; }
+      return null;
+    }
+    if (!order.length) return null;
+    return { meta, keys: order, raw: m[0], body: md.slice(m[0].length) };
+  }
+  const metaText = (v) => (Array.isArray(v) ? v.join(", ") : v == null ? "" : String(v));
+  // header/footer placeholders other than the page fields
+  function fillMeta(text, meta) {
+    return String(text).replace(/\{(title|author|date|subject)\}/g, (x, k) => metaText(meta[k]));
+  }
+  // `page-numbers:` true / yes / on → just the number; a string with {n}/{N} is used as is
+  function pageNumbersFormat(meta) {
+    const v = meta["page-numbers"];
+    if (v == null || v === "") return null;
+    if (/^(false|no|off|0)$/i.test(String(v))) return null;
+    if (/^(true|yes|on|1)$/i.test(String(v))) return "{n}";
+    return /\{n\}|\{N\}/.test(v) ? String(v) : String(v) + " {n}";
+  }
+  function frontMatterExtension() {
+    return {
+      name: "frontMatter", level: "block",
+      renderer(t) {
+        const meta = t.meta || {}, keys = Object.keys(meta);
+        const head = [meta.title, meta.author].map(metaText).filter(Boolean).map(escHtml).join(" · ") || "front matter";
+        return '<details class="fm-card"><summary><span class="fm-tag">YAML</span> ' + head + "</summary><table>" +
+          keys.map((k) => "<tr><th>" + escHtml(k) + "</th><td>" + escHtml(metaText(meta[k])) + "</td></tr>").join("") +
+          "</table></details>\n";
+      }
+    };
+  }
+
+  // ---- Editing in the preview: block map + inline text map -------------------
+  // With block marks on (the PWA preview only), every top-level block of the
+  // document gets an invisible <i class="bm" data-b="N"> in front of it and
+  // DOC.blocks[N] = { start, end } is its range in the Markdown source. HTML that
+  // opens a <div>/<table>… across blank lines stays one block until it closes.
+  let BLOCK_MARKS = false, PRE = null;
+  const HTML_WRAP = /<(\/?)(div|table|details|section|center|figure|blockquote|aside|article)\b[^>]*>/gi;
+  function htmlBalance(raw) {
+    let d = 0, m; HTML_WRAP.lastIndex = 0;
+    while ((m = HTML_WRAP.exec(raw))) d += m[1] ? -1 : 1;
+    return d;
+  }
+  function markBlocks(tokens, src, base) {
+    const out = [];
+    let cur = 0, depth = 0, blk = null;
+    for (const t of tokens) {
+      const at = t.raw ? src.indexOf(t.raw, cur) : -1;
+      if (at < 0) { out.push(t); continue; }          // synthetic / lost sync: not editable
+      cur = at + t.raw.length;
+      if (t.type === "space") { out.push(t); continue; }
+      if (depth > 0 && blk) { blk.end = base + cur; blk.type = "html"; }
+      else {
+        blk = { start: base + at, end: base + cur, type: t.type };
+        DOC.blocks.push(blk);
+        out.push({ type: "blockMark", raw: "", n: DOC.blocks.length - 1 });
+      }
+      if (t.type === "html") depth = Math.max(0, depth + htmlBalance(t.raw));
+      out.push(t);
+    }
+    tokens.length = 0;
+    out.forEach((t) => tokens.push(t));
+  }
+  function blockMarkExtension() {
+    return { name: "blockMark", level: "block", renderer(t) { return '<i class="bm" data-b="' + t.n + '"></i>'; } };
+  }
+
+  // Inline-text map of one block's Markdown for the quick text edit: every
+  // "container" (paragraph, heading, list item, table cell) with its rendered
+  // text and leaves { s, e, t0, t1, edit } — s/e are source offsets, t0/t1 offsets
+  // in the rendered text; edit = the leaf's text is written verbatim in the source.
+  const SEC_TAIL = /[ \t]*\{#sec:[A-Za-z0-9_-]+\}[ \t]*$/;
+  function editContainers(src, base) {
+    const out = [];
+    let tokens;
+    try { tokens = global.marked.lexer(src); } catch (e) { return out; }
+    function leaves(list, raw, abs, c, code) {
+      let cur = 0;
+      for (const t of list || []) {
+        if (!t.raw) continue;
+        const at = raw.indexOf(t.raw, cur);
+        if (at < 0) { c.bad = true; return; }
+        cur = at + t.raw.length;
+        const s = abs + at;
+        const push = (text, ls, edit) => { c.leaves.push({ s: ls, e: ls + (edit ? text.length : t.raw.length), text, edit, kind: code ? "code" : t.type }); };
+        switch (t.type) {
+          case "text":
+            if (t.tokens && t.tokens.length && !(t.tokens.length === 1 && t.tokens[0] === t)) { leaves(t.tokens, t.raw, s, c); break; }
+            { const r = decode(t.text); push(r, s, r === t.raw); } break;
+          case "strong": case "em": case "del": case "mark": case "link":
+            leaves(t.tokens, t.raw, s, c); break;
+          case "codespan": {
+            const r = decode(t.text), i = t.raw.indexOf(r);
+            if (i >= 0 && r.indexOf("`") < 0) c.leaves.push({ s: s + i, e: s + i + r.length, text: r, edit: true, kind: "code" });
+            else push(r, s, false);
+            break;
+          }
+          case "escape": push(decode(t.text), s, false); break;
+          case "br": case "image": case "html": case "mathInline": case "footnoteRef": case "crossRef":
+            c.leaves.push({ s, e: s + t.raw.length, text: "", edit: false, kind: t.type }); break;
+          default:
+            if (t.tokens) leaves(t.tokens, t.raw, s, c); else c.bad = true;
+        }
+      }
+    }
+    function container(kind, inl, raw, abs) {
+      const c = { kind, leaves: [], bad: false };
+      leaves(inl, raw, abs, c);
+      if (kind === "heading" && c.leaves.length) {            // {#sec:id} is not shown in the preview
+        const L = c.leaves[c.leaves.length - 1], m = SEC_TAIL.exec(L.text);
+        if (m && L.edit) { L.text = L.text.slice(0, m.index); L.e = L.s + L.text.length; }
+      }
+      let pos = 0;
+      c.leaves.forEach((L) => { L.t0 = pos; pos += L.text.length; L.t1 = pos; });
+      c.text = c.leaves.map((L) => L.text).join("");
+      out.push(c);
+    }
+    function blocks(list, raw, abs) {
+      let cur = 0;
+      for (const t of list || []) {
+        if (!t.raw) continue;
+        const at = raw.indexOf(t.raw, cur);
+        if (at < 0) return;
+        cur = at + t.raw.length;
+        const s = abs + at;
+        switch (t.type) {
+          case "paragraph": case "heading": {
+            const i = t.raw.indexOf(t.text);
+            if (i >= 0) container(t.type, t.tokens, t.text, s + i);
+            break;
+          }
+          case "text": {
+            const i = t.raw.indexOf(t.text);
+            if (i >= 0 && t.tokens) container("text", t.tokens, t.text, s + i);
+            break;
+          }
+          case "list": {
+            let ic = 0;
+            (t.items || []).forEach((it) => { const j = t.raw.indexOf(it.raw, ic); if (j < 0) return; ic = j + it.raw.length; blocks(it.tokens, it.raw, s + j); });
+            break;
+          }
+          case "table": {
+            let tc = 0;
+            const cell = (cl) => { const j = t.raw.indexOf(cl.text, tc); if (j < 0 || !cl.text) return; tc = j + cl.text.length; container("cell", cl.tokens, cl.text, s + j); };
+            (t.header || []).forEach(cell);
+            (t.rows || []).forEach((r) => r.forEach(cell));
+            break;
+          }
+          default:
+            if (t.tokens && /^(blockquote|colorBox|tableBox)$/.test(t.type)) blocks(t.tokens, t.raw, s);
+        }
+      }
+    }
+    blocks(tokens, src, base);
+    return out;
+  }
+
+  // ---- Document statistics (status bar panel) --------------------------------
+  function docStats(md) {
+    const fm = parseFrontMatter(md);
+    const body = fm ? fm.body : String(md || "");
+    const S = { headings: 0, h: [0, 0, 0, 0, 0, 0], paragraphs: 0, tables: 0, images: 0, figures: 0, captions: 0,
+      mathInline: 0, mathBlock: 0, footnotes: 0, linksExt: 0, linksInt: 0, code: 0, lists: 0, boxes: 0, marks: 0,
+      words: (body.match(/\S+/g) || []).length, chars: body.length, charsNoSpace: body.replace(/\s/g, "").length,
+      lines: body ? body.split("\n").length : 0, frontMatter: !!fm };
+    if (!global.marked) return S;
+    let tokens;
+    try { tokens = global.marked.lexer(body); } catch (e) { return S; }
+    const fnIds = new Set();
+    (function walk(list) {
+      for (const t of list || []) {
+        if (!t || typeof t !== "object") continue;
+        switch (t.type) {
+          case "heading": S.headings++; S.h[t.depth - 1]++; break;
+          case "paragraph": S.paragraphs++; break;
+          case "table": S.tables++; break;
+          case "image": S.images++; break;
+          case "figure": S.figures++; S.images++; break;
+          case "tableCaption": S.captions++; break;
+          case "mathInline": S.mathInline++; break;
+          case "mathBlock": S.mathBlock++; break;
+          case "footnoteDef": fnIds.add(t.id); break;
+          case "footnoteRef": fnIds.add(t.id); break;
+          case "link": if (/^#/.test(t.href || "")) S.linksInt++; else S.linksExt++; break;
+          case "crossRef": S.linksInt++; break;
+          case "code": S.code++; break;
+          case "list": S.lists++; break;
+          case "colorBox": S.boxes++; break;
+          case "mark": S.marks++; break;
+          case "html": {
+            const raw = t.raw || t.text || "";
+            S.tables += (raw.match(/<table\b/gi) || []).length;
+            S.images += (raw.match(/<img\b/gi) || []).length;
+            const hs = raw.match(/<h[1-6]\b/gi) || [];
+            hs.forEach((x) => { S.headings++; S.h[+x[2] - 1]++; });
+            break;
+          }
+        }
+        if (t.tokens) walk(t.tokens);
+        if (t.captionTokens) walk(t.captionTokens);
+        if (t.items) t.items.forEach((it) => walk(it.tokens));
+        if (t.header) t.header.forEach((c) => walk(c.tokens));
+        if (t.rows) t.rows.forEach((r) => r.forEach((c) => walk(c.tokens)));
+      }
+    })(tokens);
+    S.footnotes = fnIds.size;
+    return S;
+  }
+
   // All DOCXMD marked extensions (register in the PWA and the VS Code webview)
-  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension(), imageExtension()].concat(structureExtensions()); }
+  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension(), imageExtension(), markExtension(), frontMatterExtension(), blockMarkExtension()].concat(structureExtensions()); }
 
   // Numeric column detection (shared by preview and DOCX): a column with no
   // explicit alignment whose body cells are all numbers (optionally with a unit,
@@ -1097,6 +1400,22 @@
   const NUM_RE = /^[<>≤≥~≈±+\-−]?\s*\d[\d\s.,]*(?:\s*[–—-]\s*\d[\d\s.,]*)?\s*(?:%|‰|°\s?[CF]|[A-Za-zµμ°²³\/·]{1,8})?$/;
   const cellPlain = (x) => String(x == null ? "" : x).replace(/<[^>]*>/g, "").replace(/[*_`~]/g, "").replace(/&nbsp;/g, " ").trim();
   function isNumericCell(text) { const v = cellPlain(text); return !!v && NUM_RE.test(v); }
+
+  // Header / footer paragraph: plain text with {n} (PAGE) and {N} (NUMPAGES) fields.
+  // Footer text + page numbers share one line: text on the left, numbers on the right.
+  function hfRuns(text, D) {
+    return String(text).split(/(\{n\}|\{N\})/).filter((x) => x !== "").map((x) =>
+      new D.TextRun({ children: [x === "{n}" ? D.PageNumber.CURRENT : x === "{N}" ? D.PageNumber.TOTAL_PAGES : x], size: 18, color: "666666" }));
+  }
+  function hfParagraph(text, pageFmt, D) {
+    if (text && pageFmt) {
+      return new D.Paragraph({
+        children: hfRuns(text, D).concat([new D.TextRun({ children: [new D.Tab()], size: 18 })], hfRuns(pageFmt, D)),
+        tabStops: [{ type: D.TabStopType.RIGHT, position: D.TabStopPosition.MAX }]
+      });
+    }
+    return new D.Paragraph({ children: hfRuns(text || pageFmt, D), alignment: D.AlignmentType.CENTER });
+  }
 
   // ---- Main --------------------------------------------------------------
   async function toBlob(markdown, opts, onProgress) {
@@ -1106,8 +1425,12 @@
     const report = (p, label) => { if (onProgress) onProgress(p, label); };
 
     report(0.05, "parse");
-    const tokens = global.marked.lexer(markdown || "");
+    // YAML front matter → document properties, header/footer, page numbers
+    const fm = parseFrontMatter(markdown || "");
+    const meta = fm ? fm.meta : {};
+    const tokens = global.marked.lexer(fm ? fm.body : (markdown || ""));
     DOC = analyzeDoc(tokens); // numbers figures/tables/footnotes/headings (same as the preview)
+    DOC.meta = fm ? meta : null;
 
     // Pre-fetch images
     const srcs = new Set();
@@ -1120,7 +1443,8 @@
         if (opts.resolveAsset) {
           try { const b = opts.resolveAsset(s); if (b) info = await blobToInfo(b, s); } catch (e) {}
         }
-        if (!info) info = await fetchImage(s);
+        // resolveUrl: relative paths → a fetchable URL (the VS Code webview resource URI)
+        if (!info) info = await fetchImage(opts.resolveUrl ? opts.resolveUrl(s) : s);
         if (info) imgMap.set(s, info);
         done++; report(0.05 + 0.2 * (done / srcs.size), "images");
       }
@@ -1284,12 +1608,20 @@
       const d = DOC.fnDefs[id];
       footnotes[DOC.fnNum[id]] = { children: [new D.Paragraph({ children: d ? inlineRuns(d.tokens, {}, imgMap, D) : [new D.TextRun("?")] })] };
     });
+    const pageFmt = pageNumbersFormat(meta);
+    const headerText = meta.header ? fillMeta(metaText(meta.header), meta) : "";
+    const footerText = meta.footer ? fillMeta(metaText(meta.footer), meta) : "";
+    const section = { properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, children: body };
+    if (headerText) section.headers = { default: new D.Header({ children: [hfParagraph(headerText, null, D)] }) };
+    if (footerText || pageFmt) section.footers = { default: new D.Footer({ children: [hfParagraph(footerText, pageFmt, D)] }) };
     const doc = new D.Document({
       footnotes,
       features: DOC.hasToc ? { updateFields: true } : undefined,
-      creator: "DOCXMD",
-      title: opts.title || "Document",
-      description: "Converted from Markdown by DOCXMD",
+      creator: metaText(meta.author) || "DOCXMD",
+      title: metaText(meta.title) || opts.title || "Document",
+      subject: metaText(meta.subject) || undefined,
+      keywords: metaText(meta.keywords) || undefined,
+      description: metaText(meta.description || meta.abstract) || "Converted from Markdown by DOCXMD",
       numbering: { config: [{ reference: "docxmd-ol", levels: olLevels }].concat(
         Array.from(ctx.olStarts, (n) => ({ reference: "docxmd-ol-" + n, levels: olLevels.map((l) => (l.level === 0 ? Object.assign({}, l, { start: n }) : l)) }))) },
       styles: {
@@ -1302,10 +1634,7 @@
           { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 28, bold: true, color: "2a2a2a" }, paragraph: { spacing: { before: 160, after: 80 } } }
         ]
       },
-      sections: [{
-        properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } },
-        children: body
-      }]
+      sections: [section]
     });
 
     const blob = await D.Packer.toBlob(doc);
@@ -1315,5 +1644,7 @@
 
   global.MD2DOCX = { toBlob, ready, extensions, colorBoxExtension, boxColor, colorName, BOX_COLORS,
     CALLOUTS, calloutKind, calloutByColor, isDefaultCalloutTitle, isNumericCell, dataImageRanges, backdropHtml,
-    markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, imageRanges, imageWidthEdit, widthCss };
+    markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, imageRanges, imageWidthEdit, widthCss,
+    parseFrontMatter, docStats, highlightName, HIGHLIGHTS, HL_FROM_WORD,
+    setBlockMarks(on) { BLOCK_MARKS = !!on; }, blocks: () => (DOC.blocks || []).slice(), editContainers };
 })(typeof window !== "undefined" ? window : this);

@@ -28,6 +28,7 @@
     s = s.replace(/\{#[a-z]+:[^}\n]*\}/g, push);            // {#fig:id} {#tbl:id} {#sec:id}
     s = s.replace(/\[?@(?:fig|tbl|sec):[A-Za-z0-9_-]+\]?/g, push); // cross-references
     s = s.replace(/^\[TOC\]$/gi, push);                     // table of contents
+    s = s.replace(/==(?:[A-Za-z\u0400-\u04FF]+:)?(?=\S)|(?<=\S)==/g, push); // ==highlight== / ==red:…== markers
     return { s, store };
   }
   // Split a string into ordered chunks LOCALLY: { text } is prose to translate,
@@ -56,13 +57,27 @@
   }
 
   // ---- segment markdown into translatable jobs ---------------------------
+  // YAML front matter: keys stay, only the values of these keys are translated
+  const FM_TRANSLATE = /^(title|subtitle|subject|description|abstract|header|footer|page-numbers|keywords)$/i;
   function segment(md) {
     const lines = md.split("\n");
     const out = new Array(lines.length);
     const jobs = [];
     let fence = null;
+    const fm = global.MD2DOCX && global.MD2DOCX.parseFrontMatter ? global.MD2DOCX.parseFrontMatter(md) : null;
+    const fmLines = fm ? fm.raw.replace(/\r?\n$/, "").split("\n").length : 0;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
+      if (i < fmLines) {
+        const kv = /^([A-Za-z_][\w-]*[ \t]*:[ \t]*)(["']?)(.*?)(\2)[ \t]*$/.exec(line);
+        if (i > 0 && i < fmLines - 1 && kv && FM_TRANSLATE.test(kv[1].replace(/[\s:]+$/, "")) && kv[3].trim()) {
+          const chunks = makeChunks(kv[3].replace(/\{[nN]\}|\{(?:title|author|date|subject)\}/g, "`$&`"));
+          chunks.forEach((c) => { if (c.keep != null) c.keep = c.keep.replace(/^`|`$/g, ""); });
+          jobifyChunks(chunks, jobs);
+          out[i] = { render: () => kv[1] + kv[2] + renderChunks(chunks) + kv[4] };
+        } else out[i] = line;
+        continue;
+      }
       if (fence) {
         out[i] = line;
         if (new RegExp("^\\s*" + fence + "+\\s*$").test(line)) fence = null;

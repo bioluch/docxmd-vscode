@@ -11,6 +11,9 @@
   const panes = $("#panes");
 
   let applying = false;      // true while we apply an update from the document (don't echo back)
+  let docBase = "";          // webview URI of the document's folder ("" for untitled documents)
+  const isRelative = (src) => !!src && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src);
+  const resolveRel = (src) => (docBase && isRelative(src) ? docBase + src.replace(/^\.\//, "") : src);
   let editTimer = null;
 
   // Drag-resize images in the preview; the width is written back into the source
@@ -85,7 +88,9 @@
     preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] });
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     enhanceTables(preview);
-    imgResize.refresh();
+    imgResize.refresh();       // remembers each image's Markdown src first…
+    // …then relative pictures (images/image-001.png) load from the document's folder
+    if (docBase) $$("img", preview).forEach((im) => { const s = im.getAttribute("src"); if (isRelative(s)) im.setAttribute("src", resolveRel(s)); });
     $$("h1,h2,h3,h4,h5,h6", preview).forEach((h, i) => { if (!h.id) h.id = "hx-" + i; });
     if (window.MD2DOCX && MD2DOCX.fixPreviewLinks) MD2DOCX.fixPreviewLinks(preview);
     $$("li", preview).forEach((li) => {
@@ -122,6 +127,8 @@
 
   window.addEventListener("message", (ev) => {
     const msg = ev.data || {};
+    if (msg.type === "update" && msg.base != null && msg.base !== docBase) { docBase = msg.base; if (msg.text === ta.value) render(); }
+    if (msg.type === "imageSaved") { const p = __imgPending[msg.id]; if (p) { delete __imgPending[msg.id]; p(msg.path || null); } return; }
     if (msg.type === "update") {
       if (msg.text !== ta.value) {
         const pos = ta.selectionStart;
@@ -282,6 +289,15 @@
   }
 
   const cmds = {
+    highlight: () => {
+      // ==text== — inside an existing highlight the button removes it
+      const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd, sel = v.slice(s, e);
+      const m = /^==(?:[A-Za-z\u0400-\u04FF]+:)?([\s\S]+)==$/.exec(sel);
+      if (m) { replaceSel(m[1]); return; }
+      if (v.slice(s - 2, s) === "==" && v.slice(e, e + 2) === "==") { ta.setSelectionRange(s - 2, e + 2); replaceSel(sel); return; }
+      wrap("==", "==", "text");
+    },
+    cleanNotation: () => vscode.postMessage({ type: "cleanNotation" }),
     sup: () => toggleTag("sup"),
     sub: () => toggleTag("sub"),
     symbols: () => openSymbols(),
@@ -311,20 +327,24 @@
 
   /* ---------- images: paste & drag-drop → embed as data-URI ---------- */
   function humanSize(n) { return n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
-  function insertImageFile(file) {
-    return new Promise((resolve) => {
-      const r = new FileReader();
-      r.onerror = () => resolve();
-      r.onload = () => {
-        const alt = (file.name || "image").replace(/\.[^.]+$/, "").replace(/[\[\]\(\)\r\n]/g, " ").trim() || "image";
-        const s = ta.selectionStart;
-        const atLineStart = s === 0 || ta.value[s - 1] === "\n";
-        replaceSel((atLineStart ? "" : "\n") + "![" + alt + "](" + r.result + ")\n");
-        vscode.postMessage({ type: "info", text: "Image embedded (" + humanSize(file.size) + ")" });
-        resolve();
-      };
-      r.readAsDataURL(file);
+  // Saved next to the document (images/image-001.png, via the extension host) unless the
+  // document is untitled or docxmd.pastedImages = "embed" → embedded as a data-URI.
+  const __imgPending = {}; let __imgSeq = 0;
+  const readDataUrl = (file) => new Promise((resolve, reject) => { const r = new FileReader(); r.onerror = reject; r.onload = () => resolve(r.result); r.readAsDataURL(file); });
+  async function insertImageFile(file) {
+    let dataUrl;
+    try { dataUrl = await readDataUrl(file); } catch (e) { return; }
+    const alt = (file.name || "image").replace(/\.[^.]+$/, "").replace(/[\[\]\(\)\r\n]/g, " ").trim() || "image";
+    const id = ++__imgSeq;
+    const saved = await new Promise((resolve) => {
+      __imgPending[id] = resolve;
+      vscode.postMessage({ type: "saveImage", id, name: file.name, mime: file.type, dataBase64: String(dataUrl).replace(/^data:[^,]*,/, "") });
+      setTimeout(() => { if (__imgPending[id]) { delete __imgPending[id]; resolve(null); } }, 15000);
     });
+    const s = ta.selectionStart;
+    const atLineStart = s === 0 || ta.value[s - 1] === "\n";
+    replaceSel((atLineStart ? "" : "\n") + "![" + alt + "](" + (saved || dataUrl) + ")\n");
+    vscode.postMessage({ type: "info", text: saved ? "Image saved: " + saved : "Image embedded (" + humanSize(file.size) + ")" });
   }
   const isImageFile = (f) => f && /^image\//.test(f.type || "");
   ta.addEventListener("paste", (e) => {
@@ -332,7 +352,7 @@
     const imgs = [];
     for (const it of items) { if (it.kind === "file" && /^image\//.test(it.type)) { const f = it.getAsFile(); if (f) imgs.push(f); } }
     if (!imgs.length) return;
-    e.preventDefault(); imgs.forEach(insertImageFile);
+    e.preventDefault(); (async () => { for (const f of imgs) await insertImageFile(f); })();
   });
   ["dragover", "drop"].forEach((ev) => panes.addEventListener(ev, (e) => e.preventDefault()));
   panes.addEventListener("drop", async (e) => {
@@ -521,6 +541,7 @@
   document.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "f") { e.preventDefault(); toggleFind(true); }
+    else if (mod && e.shiftKey && e.key.toLowerCase() === "h") { e.preventDefault(); cmds.highlight(); }
     else if (mod && e.key === ".") { e.preventDefault(); cmds.sup(); }
     else if (mod && e.key === ",") { e.preventDefault(); cmds.sub(); }
     else if (e.key === "Escape" && popEl) closePop();
@@ -556,7 +577,7 @@
     const btn = $("#exportBtn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
     try {
       const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
-      const blob = await window.MD2DOCX.toBlob(md, { quoteColor: accent });
+      const blob = await window.MD2DOCX.toBlob(md, { quoteColor: accent, resolveUrl: resolveRel });
       const buf = await blob.arrayBuffer();
       vscode.postMessage({ type: "saveDocx", dataBase64: abToB64(buf) });
     } catch (e) {
@@ -592,13 +613,17 @@
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
       const ab = u8.buffer;
       const result = await mammoth.convertToHtml({ arrayBuffer: ab },
-        { styleMap: ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"] });
+        { styleMap: ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
+          .concat(window.DOCXFMT && DOCXFMT.highlightStyleMap ? DOCXFMT.highlightStyleMap() : []) });
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*", strongDelimiter: "**", hr: "---" });
       if (window.turndownPluginGfm) td.use(window.turndownPluginGfm.gfm);
       td.keep(["sub", "sup"]);
       let html = result.value || "";
       if (window.DOCXFMT) { DOCXFMT.tableRule(td); html = DOCXFMT.apply(html, await DOCXFMT.extract(ab)); }
-      const md = td.turndown(cleanDocxHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      let md = td.turndown(cleanDocxHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+      // Word header / footer / page numbers → YAML front matter
+      const meta = window.DOCXFMT && DOCXFMT.extractMeta ? await DOCXFMT.extractMeta(ab, "") : null;
+      if (meta) md = DOCXFMT.frontMatterText(meta) + md;
       ta.value = md; render();
       vscode.postMessage({ type: "imported", text: md });
     } catch (e) {

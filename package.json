@@ -1,8 +1,8 @@
 {
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
-  "description": "Edit Markdown with a live neumorphic preview, LaTeX math, callout blocks and colour boxes; export to Word (.docx) and import Word back to Markdown with table colours — inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.11",
+  "description": "Edit Markdown with a live neumorphic preview, LaTeX math, callout blocks, highlights and colour boxes; clean up scientific notation; export to Word (.docx) with headers, footers and page numbers, and import Word back to Markdown — inside VS Code. Companion to the DOCXMD PWA.",
+  "version": "0.1.12",
   "publisher": "docxmd",
   "engines": {
     "vscode": "^1.80.0"
@@ -19,7 +19,10 @@
     "converter",
     "latex",
     "katex",
-    "import"
+    "import",
+    "highlight",
+    "scientific notation",
+    "front matter"
   ],
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/bioluch/docxmd-vscode#readme",
@@ -41,6 +44,25 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Your personal DeepL API key, used to translate documents into the interface languages (EN · UK · ES · ZH). Stored locally in your VS Code settings and sent only to DeepL. Get a free key at https://www.deepl.com/pro-api."
+        },
+        "docxmd.pastedImages": {
+          "type": "string",
+          "enum": [
+            "folder",
+            "embed"
+          ],
+          "default": "folder",
+          "enumDescriptions": [
+            "Save pasted / dropped images to an images/ folder next to the Markdown file and insert a relative link",
+            "Embed pasted / dropped images in the text as base64 data-URIs"
+          ],
+          "markdownDescription": "Where pasted or dropped images go. `folder` writes `images/image-001.png` next to the `.md` and inserts `![…](images/image-001.png)`; untitled documents always embed."
+        },
+        "docxmd.notationDictionary": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Dictionary for **DOCXMD: Clean up scientific notation**, one entry per line: `TCore = T_{Core}`, `R2 = R^{2}`, or just `CH4` (digits become subscripts). Empty = the built-in medical list (SpO2, CO2, O2, H2O, HbA1c, PaO2, PaCO2, SaO2, EtCO2, TCore, TPeriphery, TMean, TStd, R2).",
+          "editPresentation": "multilineText"
         }
       }
     },
@@ -78,6 +100,11 @@
       {
         "command": "docxmd.setDeeplKey",
         "title": "DOCXMD: Set DeepL API key",
+        "category": "DOCXMD"
+      },
+      {
+        "command": "docxmd.cleanNotation",
+        "title": "DOCXMD: Clean up scientific notation",
         "category": "DOCXMD"
       }
     ],

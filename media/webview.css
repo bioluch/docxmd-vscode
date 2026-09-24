@@ -188,3 +188,15 @@ body {
 .tb sup { top: -.5em; }
 .tb sub { top: .45em; }
 .markdown-body img { max-width: 100%; border-radius: 8px; }
+
+/* ==highlight== (shared syntax with the DOCXMD web app) */
+.markdown-body mark.hl { color: #1a1a1a; padding: 0 .12em; border-radius: 3px; }
+.hl-yellow { background: #fff176; } .hl-red { background: #ff8a80; } .hl-green { background: #b9f6ca; }
+.hl-blue { background: #80d8ff; } .hl-pink { background: #ff80ab; } .hl-gray { background: #e0e0e0; }
+/* YAML front matter card */
+.markdown-body details.fm-card { margin: 0 0 1.2em; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-card); font-size: .85em; }
+.markdown-body details.fm-card summary { cursor: pointer; padding: .45em .8em; color: var(--text-muted); }
+.markdown-body details.fm-card .fm-tag { font: 700 .72em monospace; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 .3em; }
+.markdown-body details.fm-card table { margin: 0 .8em .7em; border: none; }
+.markdown-body details.fm-card th, .markdown-body details.fm-card td { border: none; padding: .15em .8em .15em 0; background: transparent !important; text-align: left; }
+.markdown-body details.fm-card th { color: var(--text-muted); font-family: monospace; }
