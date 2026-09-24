@@ -13,6 +13,14 @@
   let applying = false;      // true while we apply an update from the document (don't echo back)
   let editTimer = null;
 
+  // Drag-resize images in the preview; the width is written back into the source
+  const imgResize = window.DOCXMDImageResize ? DOCXMDImageResize.attach({
+    preview,
+    getText: () => ta.value,
+    applyEdit(start, end, text) { ta.setSelectionRange(start, end); replaceSel(text); },
+    label: () => "Drag to resize · double-click: original size · ←/→: step"
+  }) : { refresh() {} };
+
   marked.setOptions({ gfm: true, breaks: false });
 
   function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
@@ -77,7 +85,9 @@
     preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] });
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     enhanceTables(preview);
-    $$("h1,h2,h3,h4,h5,h6", preview).forEach((h, i) => { if (!h.id) h.id = "h-" + i; });
+    imgResize.refresh();
+    $$("h1,h2,h3,h4,h5,h6", preview).forEach((h, i) => { if (!h.id) h.id = "hx-" + i; });
+    if (window.MD2DOCX && MD2DOCX.fixPreviewLinks) MD2DOCX.fixPreviewLinks(preview);
     $$("li", preview).forEach((li) => {
       const i = li.querySelector('input[type="checkbox"]');
       if (i) { li.classList.add("task-list-item"); i.setAttribute("disabled", ""); }

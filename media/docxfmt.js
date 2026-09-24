@@ -143,11 +143,69 @@
           }));
         tables.push({ rows });
       }
-      return { tables };
+      return { tables, images: extractImages(doc) };
     } catch (e) {
       console.warn("DOCXFMT.extract", e);
       return null;
     }
+  }
+
+  // ---- image sizes -----------------------------------------------------------
+  // mammoth drops the size a picture has in Word. Collect the displayed width of
+  // every picture in document order (what mammoth turns into <img>): DrawingML
+  // <pic:pic> and legacy VML <v:imagedata>. mc:Choice is skipped because mammoth
+  // reads the mc:Fallback branch of AlternateContent.
+  const NS_PIC = "http://schemas.openxmlformats.org/drawingml/2006/picture";
+  const NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+  const NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+  const NS_V = "urn:schemas-microsoft-com:vml";
+  const NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+  const EMU_PX = 9525, COL_PX = 600; // = MAX_IMG_W in md2docx.js
+  function extractImages(doc) {
+    const body = doc.getElementsByTagNameNS(W, "body")[0];
+    if (!body) return [];
+    // % is relative to DOCXMD's own text column (what the DOCX export uses), so an
+    // imported picture is exported again at the size it had in Word
+    const colEmu = COL_PX * EMU_PX;
+    const out = [];
+    (function walk(n, inTable) {
+      for (const c of n.childNodes) {
+        if (c.nodeType !== 1) continue;
+        if (c.namespaceURI === NS_MC && c.localName === "Choice") continue;
+        if (c.namespaceURI === NS_PIC && c.localName === "pic") {
+          const ext = c.getElementsByTagNameNS(NS_A, "ext")[0];
+          let cx = ext ? +ext.getAttribute("cx") : 0;
+          if (!cx) { let p = c.parentNode; while (p && !(p.namespaceURI === NS_WP && (p.localName === "inline" || p.localName === "anchor"))) p = p.parentNode; const e = p && p.getElementsByTagNameNS(NS_WP, "extent")[0]; cx = e ? +e.getAttribute("cx") : 0; }
+          out.push({ emu: cx, colEmu, inTable });
+          continue;
+        }
+        if (c.namespaceURI === NS_V && c.localName === "imagedata") {
+          let sh = c.parentNode; const m = /(?:^|;)\s*width\s*:\s*([\d.]+)(pt|in|cm|mm|px)?/i.exec(sh && sh.getAttribute ? sh.getAttribute("style") || "" : "");
+          const k = { pt: 12700, in: 914400, cm: 360000, mm: 36000, px: EMU_PX }[(m && m[2] || "pt").toLowerCase()];
+          out.push({ emu: m ? +m[1] * k : 0, colEmu, inTable });
+          continue;
+        }
+        walk(c, inTable || (c.namespaceURI === W && c.localName === "tbl"));
+      }
+    })(body, false);
+    return out;
+  }
+  // width="NN%" (share of the text column) on body images, width="NNN" (px) in
+  // tables, where a percentage would be relative to the cell instead
+  function imageWidth(im) {
+    if (!im || !im.emu) return "";
+    if (im.inTable) return String(Math.max(1, Math.round(im.emu / EMU_PX)));
+    return Math.max(1, Math.min(100, Math.round(im.emu / im.colEmu * 100))) + "%";
+  }
+  function applyImages(html, fmt) {
+    if (!fmt || !fmt.images || !fmt.images.length || typeof document === "undefined") return html;
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const imgs = Array.from(tpl.content.querySelectorAll("img"));
+    // footnote/endnote pictures come after the body ones; fewer <img> → can't pair
+    if (imgs.length < fmt.images.length) return html;
+    fmt.images.forEach((im, i) => { const w = imageWidth(im); if (w && w !== "100%") imgs[i].setAttribute("width", w); });
+    return tpl.innerHTML;
   }
 
   // ---- apply onto mammoth HTML -------------------------------------------
@@ -160,7 +218,7 @@
     return s.join(";");
   }
 
-  function apply(html, fmt) { return structure(applyTables(html, fmt)); }
+  function apply(html, fmt) { return structure(applyTables(applyImages(html, fmt), fmt)); }
   function applyTables(html, fmt) {
     if (!fmt || !fmt.tables || !fmt.tables.length) return html;
     const tpl = document.createElement("template");
@@ -214,6 +272,9 @@
       const x = c.cloneNode(true);
       // drop our internal markers and Word's empty bookmark anchors
       x.querySelectorAll("[data-docxmd-html],[data-docxmd-quote]").forEach((e) => { e.removeAttribute("data-docxmd-html"); e.removeAttribute("data-docxmd-quote"); });
+      // headings / bookmarks that internal links point at keep an id="sec:…" anchor
+      x.querySelectorAll("[data-docxmd-sec]").forEach((e) => { e.id = "sec:" + e.getAttribute("data-docxmd-sec"); e.removeAttribute("data-docxmd-sec"); });
+      x.querySelectorAll('a[id^="sec_"]:not([href])').forEach((a) => { const p = a.parentElement; if (p && p !== x && !p.id) p.id = "sec:" + unBookmark(a.id, "sec"); });
       x.querySelectorAll("a[id]:not([href])").forEach((a) => { if (!a.textContent && !a.children.length) a.remove(); });
       return x.innerHTML.replace(/\s*\n\s*/g, " ").trim();
     };
@@ -284,6 +345,27 @@
       const h = a.closest("h1,h2,h3,h4,h5,h6");
       h.setAttribute("data-docxmd-sec", unBookmark(a.id, "sec")); a.remove();
     });
+    // Word's own TOC and cross-references: links to a bookmark inside a heading
+    // (#_Toc241144139) → the heading gets {#sec:toc241144139} and the link points at
+    // it; a TOC entry "7.\tTitle\t22" loses the tab and the page number
+    const bm = {};
+    root.querySelectorAll("a[id]").forEach((x) => { bm[x.id] = x; });
+    root.querySelectorAll('a[href^="#"]').forEach((a) => {
+      const id = a.getAttribute("href").slice(1);
+      if (!id || /^(fig|tbl|sec)_|^docxmd_|^(footnote|endnote)-/.test(id)) return;
+      const h = bm[id] && bm[id].closest("h1,h2,h3,h4,h5,h6");
+      if (!h) return;
+      let sec = h.getAttribute("data-docxmd-sec");
+      if (!sec) {
+        sec = id.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "h";
+        h.setAttribute("data-docxmd-sec", sec);
+      }
+      a.setAttribute("href", "#sec:" + sec);
+      const w = document.createTreeWalker(a, 4), texts = [];
+      for (let n = w.nextNode(); n; n = w.nextNode()) texts.push(n);
+      if (texts.length) texts[texts.length - 1].nodeValue = texts[texts.length - 1].nodeValue.replace(/\s*\t\s*\d+\s*$/, "");
+      texts.forEach((t) => { t.nodeValue = t.nodeValue.replace(/\t+/g, " "); });
+    });
     // figure captions: the image paragraph just before the caption
     root.querySelectorAll('a[id^="fig_"]').forEach((a) => {
       const cap = a.closest("p"); if (!cap) return;
@@ -293,6 +375,7 @@
       if (!img) return;
       const f = document.createElement("p");
       f.setAttribute("data-docxmd-fig", id); f.setAttribute("data-src", img.getAttribute("src") || "");
+      if (img.hasAttribute("width")) f.setAttribute("data-width", img.getAttribute("width"));
       f.innerHTML = cap.innerHTML || "&#8203;";
       prev.remove(); cap.replaceWith(f);
     });
@@ -314,6 +397,9 @@
     });
     return tpl.innerHTML;
   }
+  const bare = (x) => String(x || "").replace(/^\s*\d+(?:\.\d+)*[.)]?\s*/, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const sameText = (a, b) => bare(a) === bare(b);
+  const mdWidth = (w) => (/%$/.test(w) ? w : w + "px");
   const noteId = (href) => { const m = /#(footnote|endnote)-(\d+)$/.exec(href || ""); return m ? (m[1] === "endnote" ? "e" : "") + m[2] : null; };
   function structureRules(td) {
     td.addRule("docxmdNumbered", { filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-numbered"), replacement: () => "\n\n<!-- docxmd: numbered-headings -->\n\n" });
@@ -324,7 +410,17 @@
     });
     td.addRule("docxmdFigure", {
       filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-fig"),
-      replacement: (content, n) => "\n\n![" + content.replace(/​/g, "").trim() + "](" + n.getAttribute("data-src") + "){#fig:" + n.getAttribute("data-docxmd-fig") + "}\n\n"
+      replacement: (content, n) => "\n\n![" + content.replace(/​/g, "").trim() + "](" + n.getAttribute("data-src") + "){#fig:" + n.getAttribute("data-docxmd-fig") +
+        (n.hasAttribute("data-width") ? " width=" + mdWidth(n.getAttribute("data-width")) : "") + "}\n\n"
+    });
+    // <img width="…"> → ![alt](src){width=…}
+    td.addRule("docxmdSizedImage", {
+      filter: (n) => n.nodeName === "IMG" && /^[\d.]+%?$/.test(n.getAttribute("width") || ""),
+      replacement: (content, n) => {
+        const alt = (n.getAttribute("alt") || "").replace(/([\\\[\]])/g, "\\$1").replace(/\s*\n\s*/g, " ");
+        const title = n.getAttribute("title");
+        return "![" + alt + "](" + (n.getAttribute("src") || "") + (title ? ' "' + title.replace(/"/g, '\\"') + '"' : "") + "){width=" + mdWidth(n.getAttribute("width")) + "}";
+      }
     });
     td.addRule("docxmdTableCaption", {
       filter: (n) => n.nodeName === "P" && n.hasAttribute("data-docxmd-tblcap"),
@@ -332,7 +428,13 @@
     });
     td.addRule("docxmdXref", {
       filter: (n) => n.nodeName === "A" && /^#(fig|tbl|sec)_/.test(n.getAttribute("href") || ""),
-      replacement: (content, n) => { const h = n.getAttribute("href").slice(1), k = h.slice(0, 3); return "@" + k + ":" + unBookmark(h, k); }
+      replacement: (content, n) => {
+        const h = n.getAttribute("href").slice(1), k = h.slice(0, 3), id = unBookmark(h, k);
+        // a DOCXMD cross-ref shows the heading text; other text (a TOC entry) stays a link
+        const head = k === "sec" && n.ownerDocument && n.ownerDocument.querySelector('[data-docxmd-sec="' + id + '"]');
+        if (k === "sec" && (!head || !sameText(head.textContent, content))) return "[" + content + "](#sec:" + id + ")";
+        return "@" + k + ":" + id;
+      }
     });
     td.addRule("docxmdNoteRef", {
       filter: (n) => n.nodeName === "SUP" && n.children.length === 1 && n.firstElementChild.nodeName === "A" && noteId(n.firstElementChild.getAttribute("href")) != null,

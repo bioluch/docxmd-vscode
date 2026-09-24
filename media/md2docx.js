@@ -49,6 +49,88 @@
     });
   }
 
+  // ---- Image width ---------------------------------------------------------
+  // One width syntax for every image: `{width=60%}` after ![](…), or width="…" /
+  // style="width:…" on <img>. % is relative to the text column (MAX_IMG_W in
+  // Word), plain numbers are px; cm/mm/in are converted at 96 dpi.
+  const WIDTH_ATTR_RE = /\bwidth\s*=\s*"?([\d.]+(?:%|px|cm|mm|in)?)"?/;
+  const UNIT_PX = { px: 1, "": 1, cm: 96 / 2.54, mm: 96 / 25.4, in: 96 };
+  function widthCss(w) { return /^[\d.]+$/.test(w) ? w + "px" : w; }
+  function htmlImgWidth(el) {
+    const st = /(?:^|;)\s*width\s*:\s*([\d.]+(?:%|px|cm|mm|in))/i.exec(el.getAttribute("style") || "");
+    const a = /^\s*([\d.]+(?:%|px)?)\s*$/.exec(el.getAttribute("width") || "");
+    return st ? st[1] : a ? a[1] : "";
+  }
+  // Word size (px) of an image for a width value; no width → natural size
+  function sizeFor(info, width) {
+    let w = info.width, h = info.height;
+    const m = /^([\d.]+)(%|px|cm|mm|in)?$/.exec(String(width || "").trim());
+    if (m && +m[1] > 0) {
+      const target = m[2] === "%" ? MAX_IMG_W * Math.min(100, +m[1]) / 100 : Math.min(MAX_IMG_W, +m[1] * UNIT_PX[m[2] || ""]);
+      h = Math.round(h * target / w); w = Math.round(target);
+    }
+    return { width: Math.max(1, w), height: Math.max(1, h) };
+  }
+  function imageRun(info, width, D) {
+    return new D.ImageRun({ data: info.data, type: info.type, transformation: sizeFor(info, width) });
+  }
+  function parseHtmlFragment(raw) {
+    if (typeof global.DOMParser === "undefined") return null;
+    return new global.DOMParser().parseFromString("<!doctype html><body>" + raw + "</body>", "text/html").body;
+  }
+
+  // ---- Source positions of images (for resizing from the preview) ----------
+  // ![alt](src "title"){attrs}   and   <img … src="…" …>
+  const MD_IMG_RE = /!\[(?:[^\]\\\n]|\\.)*\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+"[^"\n]*")?\s*\)(\{[^}\n]*\})?/g;
+  const HTML_IMG_RE = /<img\b[^>]*>/gi;
+  function imageRanges(text) {
+    const out = [];
+    if (!text) return out;
+    let m;
+    MD_IMG_RE.lastIndex = 0;
+    while ((m = MD_IMG_RE.exec(text))) {
+      out.push({ kind: "md", start: m.index, end: m.index + m[0].length, src: m[1].replace(/^<|>$/g, ""),
+        attr: m[2] ? { start: m.index + m[0].length - m[2].length, end: m.index + m[0].length, text: m[2] } : null });
+    }
+    HTML_IMG_RE.lastIndex = 0;
+    while ((m = HTML_IMG_RE.exec(text))) {
+      const s = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(m[0]);
+      out.push({ kind: "html", start: m.index, end: m.index + m[0].length, src: s ? (s[1] != null ? s[1] : s[2]).replace(/&amp;/g, "&") : "", tag: m[0] });
+    }
+    return out.sort((a, b) => a.start - b.start);
+  }
+  // Minimal edit {start, end, text} that sets (or with width=null removes) the width
+  // of an image found by imageRanges(). Only the attribute part changes, never the
+  // (possibly huge base64) src — cheap to apply and to undo.
+  function imageWidthEdit(r, width) {
+    if (r.kind === "md") {
+      if (!r.attr) return width ? { start: r.end, end: r.end, text: "{width=" + width + "}" } : null;
+      let inner = r.attr.text.slice(1, -1);
+      if (WIDTH_ATTR_RE.test(inner)) inner = inner.replace(/\s*\bwidth\s*=\s*"?[\d.]+(?:%|px|cm|mm|in)?"?/, width ? " width=" + width : "").trim();
+      else if (width) inner = (inner.trim() + " width=" + width).trim();
+      return { start: r.attr.start, end: r.attr.end, text: inner ? "{" + inner + "}" : "" };
+    }
+    // <img>: only the attribute ranges; src stays untouched
+    const tag = r.tag, edits = [];
+    const wa = /\swidth\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i.exec(tag);
+    const sa = /\sstyle\s*=\s*("([^"]*)"|'([^']*)')/i.exec(tag);
+    if (sa) {
+      const css = sa[2] != null ? sa[2] : sa[3];
+      const clean = css.replace(/(^|;)\s*(?:max-)?width\s*:[^;]*/gi, "$1").replace(/^;+|;+$/g, "").replace(/;;+/g, ";").trim();
+      if (clean !== css.trim()) edits.push({ s: sa.index, e: sa.index + sa[0].length, t: clean ? ' style="' + clean + '"' : "" });
+    }
+    const hv = /\sheight\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i.exec(tag); // keep the aspect ratio
+    if (hv) edits.push({ s: hv.index, e: hv.index + hv[0].length, t: "" });
+    if (wa) edits.push({ s: wa.index, e: wa.index + wa[0].length, t: width ? ' width="' + width.replace(/px$/, "") + '"' : "" });
+    else if (width) edits.push({ s: 4, e: 4, t: ' width="' + width.replace(/px$/, "") + '"' });
+    if (!edits.length) return null;
+    edits.sort((a, b) => a.s - b.s);
+    const s = edits[0].s, e = Math.max.apply(null, edits.map((x) => x.e));
+    let seg = tag.slice(s, e);
+    for (let k = edits.length - 1; k >= 0; k--) seg = seg.slice(0, edits[k].s - s) + edits[k].t + seg.slice(edits[k].e - s);
+    return { start: r.start + s, end: r.start + e, text: seg };
+  }
+
   function collectImageSrcs(tokens, out) {
     for (const t of tokens) {
       if ((t.type === "image" || t.type === "figure") && t.href) out.add(t.href);
@@ -145,13 +227,15 @@
           runs.push(new D.TextRun({ text: "", break: 1 })); break;
         case "link": {
           const kids = inlineRuns(tk.tokens, Object.assign({}, style, { color: "0563C1", underline: true }), imgMap, D);
-          runs.push(new D.ExternalHyperlink({ link: tk.href || "#", children: kids.length ? kids : [mkRun(tk.text || tk.href, { color: "0563C1", underline: true }, D)] }));
+          const children = kids.length ? kids : [mkRun(tk.text || tk.href, { color: "0563C1", underline: true }, D)];
+          const anchor = internalAnchor(tk.href);
+          runs.push(anchor ? new D.InternalHyperlink({ anchor, children }) : new D.ExternalHyperlink({ link: tk.href || "#", children }));
           break;
         }
         case "image": {
           const info = tk.href && imgMap.get(tk.href);
           if (info) {
-            runs.push(new D.ImageRun({ data: info.data, type: info.type, transformation: { width: info.width, height: info.height } }));
+            runs.push(imageRun(info, tk.width, D));
           } else if (tk.text) {
             runs.push(mkRun("[" + tk.text + "]", Object.assign({}, style, { italics: true }), D));
           }
@@ -182,6 +266,12 @@
             text(raw.slice(last, m.index)); last = re.lastIndex;
             const tag = m[2].toLowerCase();
             if (tag === "br") { runs.push(new D.TextRun({ text: "", break: 1 })); continue; }
+            if (tag === "img") {
+              const b = parseHtmlFragment(m[0]), el = b && b.querySelector("img");
+              const info = el && imgMap.get(el.getAttribute("src"));
+              if (info) runs.push(imageRun(info, htmlImgWidth(el), D));
+              continue;
+            }
             const fmt = HTML_FMT[tag];
             if (!fmt || m[3]) continue;
             if (!m[1]) { htmlStack.push({ tag, prev: style }); style = Object.assign({}, style, fmt); }
@@ -443,7 +533,7 @@
         if (tag === "br") { runs.push(new D.TextRun({ text: "", break: 1 })); continue; }
         if (tag === "img") {
           const info = ctx.imgMap.get(n.getAttribute("src"));
-          if (info) runs.push(new D.ImageRun({ data: info.data, type: info.type, transformation: { width: info.width, height: info.height } }));
+          if (info) runs.push(imageRun(info, htmlImgWidth(n), D));
           continue;
         }
         if (tag === "table") { flush(); out.push(buildHtmlTable(n, ctx)); continue; }
@@ -465,7 +555,11 @@
         }
         const block = HTML_BLOCK.test(tag);
         if (block) flush();
+        const sec = /^sec:([A-Za-z0-9_-]+)$/.exec(n.getAttribute("id") || "");
+        const before = runs.length;
         walk(n, /^h[1-6]$/.test(tag) ? Object.assign(elFmt(n, st), { bold: true }) : elFmt(n, st), listInfo);
+        // <h3 id="sec:x"> → Word bookmark, target of internal links (#sec:x)
+        if (sec) runs.splice(before, runs.length - before, new D.Bookmark({ id: bookmarkName("sec", sec[1]), children: runs.slice(before) }));
         if (block) flush();
       }
     })(cell, style, null);
@@ -734,7 +828,16 @@
   // Word bookmark names: letters, digits, "_" only ("-" → "__", reversed on import)
   const bookmarkName = (kind, id) => (kind + "_" + String(id).replace(/-/g, "__")).slice(0, 40);
 
-  function emptyDoc() { return { figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
+  // Word bookmark for a heading anchor: sec:id → sec_id, h-3 → h_3
+  const headingBookmark = (anchor) => (/^sec:/.test(anchor) ? bookmarkName("sec", anchor.slice(4)) : String(anchor).replace(/-/g, "_"));
+  // #sec:id / #fig:id / #tbl:id / #h-3 → Word bookmark name (null: not an internal target)
+  function internalAnchor(href) {
+    const m = /^#(sec|fig|tbl):([A-Za-z0-9_-]+)$/.exec(href || "");
+    if (m) return m[1] === "sec" ? (DOC.secs[m[2]] || DOC.htmlIds.has("sec:" + m[2]) ? bookmarkName("sec", m[2]) : null) : ((m[1] === "fig" ? DOC.figs : DOC.tbls)[m[2]] ? bookmarkName(m[1], m[2]) : null);
+    const h = /^#(h-\d+)$/.exec(href || "");
+    return h && DOC.headings.some((x) => x.anchor === h[1] && x.linked) ? headingBookmark(h[1]) : null;
+  }
+  function emptyDoc() { return { htmlIds: new Set(), figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
   let DOC = emptyDoc();
 
   function tokensText(tokens) {
@@ -745,11 +848,17 @@
   function analyzeDoc(tokens) {
     const D = emptyDoc();
     let fig = 0, tbl = 0, fn = 0, hn = 0;
+    const links = [];
     (function walk(list) {
       for (const t of list || []) {
         if (!t || typeof t !== "object") continue;
         switch (t.type) {
-          case "html": if (NUMBERING_RE.test(t.raw || t.text || "")) D.numbered = true; break;
+          case "html": {
+            const raw = t.raw || t.text || "";
+            if (NUMBERING_RE.test(raw)) D.numbered = true;
+            raw.replace(/\sid\s*=\s*"([^"]+)"/gi, (m, id) => { D.htmlIds.add(id); return m; });
+            break;
+          }
           case "heading": {
             const m = SEC_ATTR_RE.exec(t.text || "");
             let sec = null;
@@ -769,6 +878,7 @@
           case "footnoteDef": D.fnDefs[t.id] = t; break;
           case "footnoteRef": if (!(t.id in D.fnNum)) { D.fnNum[t.id] = ++fn; D.fnOrder.push(t.id); } break;
           case "toc": D.hasToc = true; break;
+          case "link": if (/^#./.test(t.href || "")) links.push(t); break;
         }
         if (t.tokens) walk(t.tokens);
         if (t.titleTokens) walk(t.titleTokens);
@@ -778,6 +888,7 @@
         if (t.rows) t.rows.forEach((r) => r.forEach((c) => walk(c.tokens)));
       }
     })(tokens);
+    resolveLinks(D, links);
     if (D.numbered && D.headings.length) {
       // a single top-level title is not numbered: numbering starts one level below it
       const h1 = D.headings.filter((h) => h.depth === 1).length;
@@ -791,6 +902,61 @@
       });
     }
     return D;
+  }
+  // [text](#anchor) links to headings. Anchors that exist (#sec:id, #h-3) are kept;
+  // anything else — GitHub-style slugs (#my-heading), Word bookmarks left over from a
+  // .docx TOC (#_Toc241144139) — is matched to a heading by slug or by the link text
+  // ("7.\tTitle\t22": list number and page number ignored). Links with the same text
+  // go to same-text headings in document order. The link token gets the heading's
+  // anchor, so the preview scrolls there and the DOCX gets an internal link.
+  const textKey = (x) => String(x || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const lettersKey = (x) => String(x || "").toLowerCase().replace(/[^\p{L}]+/gu, "");
+  const slugOf = (x) => String(x || "").trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, "").replace(/\s/g, "-");
+  const noPage = (x) => String(x || "").replace(/(?:[\t .…·_-]*\t|[ .…·_]{2,}|\s)\d+\s*$/, "");
+  const noNum = (x) => String(x || "").replace(/^\s*\d+(?:\.\d+)*[.)]?\s*/, "");
+  // headings: [{text, anchor}], links: [{href, label}] → heading (or null) per link
+  function matchLinks(headings, links, known) {
+    const tiers = [
+      [(h) => textKey(h.text), (l) => textKey(l)],
+      [(h) => textKey(h.text), (l) => textKey(noPage(l))],
+      [(h) => textKey(noNum(h.text)), (l) => textKey(noNum(noPage(l)))],
+      [(h) => lettersKey(h.text), (l) => lettersKey(noPage(l))]
+    ].map(([hk, lk]) => { const map = new Map(); headings.forEach((h) => { const k = hk(h); if (k) { if (!map.has(k)) map.set(k, []); map.get(k).push(h); } }); return { map, lk, seen: new Map() }; });
+    const bySlug = new Map(); headings.forEach((h) => { const k = slugOf(h.text); if (k && !bySlug.has(k)) bySlug.set(k, h); });
+    return links.map((l) => {
+      let target = String(l.href || "").slice(1);
+      try { target = decodeURIComponent(target); } catch (e) {}
+      if (!target || known(target) || /^(fig|tbl|fn|fnref)[:-]/.test(target)) return null;
+      let h = bySlug.get(target.toLowerCase()) || null;
+      for (let i = 0; !h && i < tiers.length; i++) {
+        const T = tiers[i], k = T.lk(l.label), list = k && T.map.get(k);
+        if (!list) continue;
+        const n = T.seen.get(k) || 0; T.seen.set(k, n + 1);
+        h = list[n % list.length];
+      }
+      return h;
+    });
+  }
+  function resolveLinks(D, links) {
+    if (!links.length || !D.headings.length) return;
+    const anchors = new Set(D.headings.map((h) => h.anchor));
+    const hits = matchLinks(D.headings, links.map((t) => ({ href: t.href, label: tokensText(t.tokens) || t.text || "" })),
+      (id) => anchors.has(id) || D.htmlIds.has(id));
+    hits.forEach((h, i) => { if (h) { links[i].href = "#" + h.anchor; h.linked = true; } });
+  }
+  // Preview pass for links whose target is still missing — e.g. headings written as
+  // raw HTML (<h3> inside an HTML table) or an older import: match against the
+  // rendered headings the same way. Call after heading ids are assigned.
+  function fixPreviewLinks(root) {
+    const links = Array.from(root.querySelectorAll('a[href^="#"]'));
+    if (!links.length) return;
+    const doc = root.ownerDocument;
+    const exists = (id) => { const e = doc.getElementById(id); return !!e && root.contains(e); };
+    const heads = Array.from(root.querySelectorAll("h1,h2,h3,h4,h5,h6")).filter((h) => h.id)
+      .map((h) => ({ text: h.textContent, anchor: h.id }));
+    if (!heads.length) return;
+    const hits = matchLinks(heads, links.map((a) => ({ href: a.getAttribute("href"), label: a.textContent })), exists);
+    hits.forEach((h, i) => { if (h) links[i].setAttribute("href", "#" + h.anchor); });
   }
   const xrefText = (kind, id) => {
     if (kind === "sec") { const h = DOC.secs[id]; return h ? (h.num ? h.num + " " : "") + h.text : null; }
@@ -834,7 +1000,7 @@
         tokenizer(src) {
           const m = FIG_RE.exec(src); if (!m) return undefined;
           const id = /#fig:([A-Za-z0-9_-]+)/.exec(m[4]); if (!id) return undefined;
-          const w = /\bwidth\s*=\s*"?([\d.]+(?:%|px|cm|mm|in)?)"?/.exec(m[4]);
+          const w = WIDTH_ATTR_RE.exec(m[4]);
           const caption = m[1].replace(/\\(.)/g, "$1");
           return { type: "figure", raw: m[0], id: id[1], href: m[2].replace(/^<|>$/g, ""), title: m[3] || "", caption,
             width: w ? w[1] : "", captionTokens: this.lexer.inlineTokens(caption) };
@@ -842,7 +1008,7 @@
         renderer(t) {
           const n = DOC.figs[t.id], cap = this.parser.parseInline(t.captionTokens);
           return '<figure class="fig" id="fig:' + escHtml(t.id) + '"><img src="' + escHtml(t.href) + '" alt="' + escHtml(tokensText(t.captionTokens)) + '"' +
-            (t.title ? ' title="' + escHtml(t.title) + '"' : "") + (t.width ? ' style="width:' + escHtml(/^[\d.]+$/.test(t.width) ? t.width + "px" : t.width) + '"' : "") +
+            (t.title ? ' title="' + escHtml(t.title) + '"' : "") + (t.width ? ' style="width:' + escHtml(widthCss(t.width)) + '"' : "") +
             '><figcaption><strong>' + word("fig") + " " + (n || "?") + "</strong>" + (t.caption ? " — " + cap : "") + "</figcaption></figure>\n";
         } },
       { name: "tableCaption", level: "block",
@@ -901,8 +1067,29 @@
     };
   }
 
+  // ![alt](src "title"){width=60%} — any image (not only numbered figures) with a width.
+  // Named "image" so its renderer also serves marked's own image tokens (falls back
+  // to the default when there is no width).
+  const IMG_ATTR_RE = /^!\[((?:[^\]\\\n]|\\.)*)\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+"([^"\n]*)")?\s*\)\{([^}\n]*)\}/;
+  function imageExtension() {
+    return {
+      name: "image", level: "inline",
+      start(src) { const i = src.indexOf("!["); return i < 0 ? undefined : i; },
+      tokenizer(src) {
+        const m = IMG_ATTR_RE.exec(src); if (!m) return undefined;
+        const w = WIDTH_ATTR_RE.exec(m[4]); if (!w) return undefined;
+        return { type: "image", raw: m[0], href: m[2].replace(/^<|>$/g, ""), title: m[3] || null, text: m[1].replace(/\\(.)/g, "$1"), width: w[1] };
+      },
+      renderer(t) {
+        if (!t.width) return false;
+        return '<img src="' + escHtml(t.href) + '" alt="' + escHtml(t.text || "") + '"' + (t.title ? ' title="' + escHtml(t.title) + '"' : "") +
+          ' style="width:' + escHtml(widthCss(t.width)) + '">';
+      }
+    };
+  }
+
   // All DOCXMD marked extensions (register in the PWA and the VS Code webview)
-  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension()].concat(structureExtensions()); }
+  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension(), imageExtension()].concat(structureExtensions()); }
 
   // Numeric column detection (shared by preview and DOCX): a column with no
   // explicit alignment whose body cells are all numbers (optionally with a unit,
@@ -957,6 +1144,7 @@
             let hr = inlineRuns(tk.tokens, {}, imgMap, D);
             if (h.num) hr.unshift(new D.TextRun(h.num + " "));
             if (h.sec) hr = [new D.Bookmark({ id: bookmarkName("sec", h.sec), children: hr })];
+            else if (h.linked) hr = [new D.Bookmark({ id: headingBookmark(h.anchor), children: hr })];
             // marker so a DOCX import restores <!-- docxmd: numbered-headings -->
             if (h.num && !ctx.numMarked) { ctx.numMarked = true; hr.unshift(new D.Bookmark({ id: "docxmd_numbered", children: [] })); }
             body.push(new D.Paragraph({
@@ -971,13 +1159,8 @@
           case "figure": {
             const info = imgMap.get(tk.href);
             let img;
-            if (info) {
-              let w = info.width, h = info.height;
-              const pct = /^([\d.]+)%$/.exec(tk.width || ""), px = /^([\d.]+)(?:px)?$/.exec(tk.width || "");
-              const target = pct ? MAX_IMG_W * Math.min(100, +pct[1]) / 100 : px ? Math.min(MAX_IMG_W, +px[1]) : 0;
-              if (target) { h = Math.round(h * target / w); w = Math.round(target); }
-              img = new D.ImageRun({ data: info.data, type: info.type, transformation: { width: w, height: h } });
-            } else img = mkRun("[" + tk.caption + "]", { italics: true }, D);
+            if (info) img = imageRun(info, tk.width, D);
+            else img = mkRun("[" + tk.caption + "]", { italics: true }, D);
             body.push(new D.Paragraph({ children: [img], alignment: D.AlignmentType.CENTER, keepNext: true, spacing: { before: 120, after: 60 } }));
             const cap = [new D.Bookmark({ id: bookmarkName("fig", tk.id), children: [new D.TextRun({ text: word("fig") + " " + (DOC.figs[tk.id] || "?"), bold: true })] })];
             if (tk.caption) cap.push(new D.TextRun(" — "), ...inlineRuns(tk.captionTokens, {}, imgMap, D));
@@ -1065,6 +1248,11 @@
             }
             if (al) { alignStack.push(al); break; }      // opening wrapper
             if (closing && alignStack.length) { alignStack.pop(); break; } // closing wrapper
+            if (/<img\b/i.test(raw)) {
+              // <img width="…"> (and text around it) as real Word paragraphs
+              const frag = parseHtmlFragment(raw);
+              if (frag) { body.push(...htmlCellChildren(frag, {}, curAlign(), ctx)); break; }
+            }
             const txt = raw.replace(/<[^>]*>/g, "").trim();
             if (txt) body.push(new D.Paragraph({ children: [mkRun(decode(txt), {}, D)], alignment: mapAlign(curAlign(), D) }));
             break;
@@ -1127,5 +1315,5 @@
 
   global.MD2DOCX = { toBlob, ready, extensions, colorBoxExtension, boxColor, colorName, BOX_COLORS,
     CALLOUTS, calloutKind, calloutByColor, isDefaultCalloutTitle, isNumericCell, dataImageRanges, backdropHtml,
-    markedConfig, bookmarkName, NUMBERING_RE };
+    markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, imageRanges, imageWidthEdit, widthCss };
 })(typeof window !== "undefined" ? window : this);

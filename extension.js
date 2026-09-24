@@ -369,6 +369,7 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "docx.umd.js")}"></script>
   <script src="${v("md2docx.js")}"></script>
   <script src="${v("docxfmt.js")}"></script>
+  <script src="${v("imgresize.js")}"></script>
   <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
   <script src="${v("vendor", "turndown.min.js")}"></script>
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>

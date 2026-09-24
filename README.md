@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.1.11:** **resize images with the mouse** — hover an image in the preview and drag the handle at its corner; the width is written into the Markdown (`{width=60%}`) and carried into the exported `.docx`. Importing a `.docx` now keeps each picture's size from Word.
+>
 > **New in 0.1.10:** when the DeepL quota is used up (or the key is rejected) a dialog lets you **enter another API key** and the translation continues; new command **DOCXMD: Set DeepL API key**.
 >
 > **Fixed in 0.1.9:** translating a document asks for your DeepL API key again (0.1.7–0.1.8 showed *“Translate failed: Failed to fetch”* instead).
@@ -107,6 +109,14 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.11
+
+- **Image size, live:** hover an image in the preview and drag the handle at its bottom-right corner — the image resizes as you drag, and on release the width is written into the source: `![](pic.png){width=60%}` (or `width="…"` on an HTML `<img>`). Double-click the handle for the original size; with the handle focused, `←`/`→` step by 5 %. Edits are ordinary undoable text edits.
+- **Width syntax for every image:** `{width=50%}`, `{width=300px}`, `{width=8cm}` / `mm` / `in` work on any image, not only numbered figures. `%` is a share of the text column; images inside tables use px.
+- **DOCX export honours the width** of `![](…){width=…}`, figures and HTML `<img width="…">` / `style="width:…"` (HTML images were previously exported at natural size or dropped).
+- **DOCX import keeps picture sizes** from Word: body images get `{width=NN%}`, images in tables get px.
+- **Table of contents links work:** clicking an entry of a Word TOC imported from `.docx` (or any `[text](#anchor)` link — GitHub-style `#my-heading` slugs included) scrolls to the heading. Import now writes exact anchors (`{#sec:…}` / `id="sec:…"`, also for headings inside tables); links in older imported files are matched to headings by their text. In the exported `.docx` these links are internal links to bookmarks.
 
 ## What's new in 0.1.10
 
