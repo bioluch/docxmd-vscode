@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.3.0:** **font, font size and text colour** from the toolbar (**Aa** / size / **A**) — for the selected text (also in Preview mode) or, with nothing selected, for the whole document (front matter `font:` / `font-size:`, used by the preview and the Word export). **Word import** now keeps **font sizes**, **centred / right-aligned paragraphs and pictures**, and **table column widths** — pictures in tables no longer stick out of their column. See [What's new in 0.3.0](#whats-new-in-030).
+>
 > **New in 0.2.1:** the complete **smart editing in Preview mode** (it was missing from the 0.2.0 package on the Marketplace) — in the quick text edit `Enter` adds list items and splits paragraphs, `Tab` / `Shift+Tab` change list levels and move between table cells, `Alt+↑/↓` move items, rows and blocks, `Ctrl+B` / `Ctrl+I` and `* = ~` format the selection, pasted links and formatted text become Markdown; pasting formatted text keeps the spaces around links and bold text; nested task lists keep their parent's number in the preview; a full [Keyboard shortcuts](#keyboard-shortcuts) table. See [What's new in 0.2.1](#whats-new-in-021).
 >
 > **New in 0.2.0:** a smarter editor — **Enter continues lists, quotes and table rows**, **Tab / Shift+Tab** change list levels and move between table cells, **Alt+↑/↓** move lines, **Shift+Alt+↑/↓** duplicate them, **Ctrl+/** comments out, `* _ \` = ~ ( [` wrap the selection; text **pasted from Word or a web page becomes Markdown**, a URL pasted on selected text becomes a link; **Align table** (`Ctrl+Shift+T`); **Markdown syntax highlighting, line numbers and the current line** in the editor — and the same smart editing **in Preview mode** (new list items, list levels, table cells, splitting paragraphs, wrapping, smart paste). See [What's new in 0.2.0](#whats-new-in-020).
@@ -52,6 +54,7 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - **Smart paste** — text copied from Word, Google Docs or a web page becomes Markdown; a URL pasted onto selected text becomes a link; `Ctrl+Shift+V` pastes plain text.
 - **Markdown syntax highlighting, line numbers and the current line** in the editor (Document menu → Editor).
 - **Align table** (`Ctrl+Shift+T`) — straight columns in the pipe table under the cursor.
+- **Font, size and colour** (toolbar **Aa** / size / **A**) — selected text gets `<span style="font-size:14pt">…</span>` (a second choice updates the same span); nothing selected → the whole document via front matter `font:` / `font-size:`. Works in the source, the ✎ block editor and Preview mode; exported to Word as real run formatting and default font / size.
 - Live preview with synchronized Markdown source and rendered document.
 - Formatting toolbar for common Markdown editing operations.
 - **Text & image alignment** (left / center / right / justify) — renders in the preview and is honoured on DOCX export.
@@ -198,6 +201,18 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.3.0
+
+Shared with the DOCXMD web app 1.7 (new `media/textstyle.js`; updated `md2docx.js`, `docxfmt.js`, `mdedit.js`, `previewedit.js`):
+
+- **Font, size, colour.** Three toolbar buttons: **Aa** — font (common Office / Windows fonts, “Default”), size — 8…72 pt, **A** — 20 colours, a custom colour, “Automatic”. With text selected (in the source, in the ✎ block editor, or in Preview mode — a quick edit or a plain selection inside a paragraph, list item or table cell, HTML tables included) only that text changes: `<span style="color:#C00000;font-size:14pt">…</span>`; choosing again updates the same span, “Default” / “Automatic” removes it. With nothing selected, font and size apply to the **whole document** — front matter `font: Georgia`, `font-size: 11pt`: the preview shows the body text in them (headings keep their size) and the Word export makes them the document's default font and size. Colour always needs a selection. Every change is one undoable edit.
+- **Word export** understands `<span style="font-size / font-family / color">` and `<font>`, a table's `font-size`, `<colgroup>` column widths (fixed layout; pictures are scaled to their column) and `<div style="text-align:…">` inside cells.
+- **Word import (DOCXMD: Import Word):**
+  - **font sizes** — the size most paragraphs use becomes front matter `font-size:`; other sizes become `<span style="font-size:…pt">` (a cell or table written in one size carries it on `<td>` / `<table>`); headings keep their level's size;
+  - **alignment** — centred / right-aligned paragraphs and pictures become `<div align="center">` around Markdown; in tables the cell (or a `<div style="text-align:center">` inside it) is centred;
+  - **column widths** — Word's column grid becomes `<colgroup><col style="width:46%">…` on an HTML table with `table-layout:fixed`, so the preview and the export keep the proportions and **pictures never stick out of their column**;
+  - the import pipeline is now one shared function (`DOCXFMT.toMarkdown`) — the extension and the web app convert identically.
 
 ## What's new in 0.2.1
 

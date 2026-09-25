@@ -440,6 +440,10 @@ class DocxmdEditorProvider {
       <button class="tb" data-cmd="symbols" data-tt="tb.symbols">&Omega;</button>
       <button class="tb" data-cmd="cleanNotation" data-tt="tb.sciclean">${svg('<path d="M9 3h6"/><path d="M10 3v6.5L4.6 18.2A1.8 1.8 0 0 0 6.1 21h11.8a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 14h9"/>')}</button>
       <span class="sep"></span>
+      <button class="tb" data-ts="font" data-tt="tb.fontFamily"><span class="ts-ico">Aa</span></button>
+      <button class="tb" data-ts="size" data-tt="tb.fontSize">${svg('<path d="M3 7V5h11v2"/><path d="M8.5 5v14"/><path d="M13 12v-1.5h8V12"/><path d="M17 10.5V19"/>')}</button>
+      <button class="tb" data-ts="color" data-tt="tb.fontColor"><span class="ts-ico ts-a">A<i></i></span></button>
+      <span class="sep"></span>
       <button class="tb" data-cmd="h1" data-tt="tb.h1">H1</button>
       <button class="tb" data-cmd="h2" data-tt="tb.h2">H2</button>
       <button class="tb" data-cmd="h3" data-tt="tb.h3">H3</button>
@@ -533,6 +537,7 @@ class DocxmdEditorProvider {
   <script src="${v("previewedit.js")}"></script>
   <script src="${v("mdedit.js")}"></script>
   <script src="${v("mdhighlight.js")}"></script>
+  <script src="${v("textstyle.js")}"></script>
   <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
   <script src="${v("vendor", "turndown.min.js")}"></script>
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>

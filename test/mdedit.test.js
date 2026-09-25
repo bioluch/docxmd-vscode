@@ -90,3 +90,37 @@ test("rich HTML detection", () => {
   assert.ok(E.isRichHtml("<p>Hello <b>x</b></p>"));
   assert.ok(!E.isRichHtml("<div><span style='color:red'>code</span></div>"));
 });
+
+// ---- text style (0.3.0) ----
+const apply = (t, r) => (r ? t.slice(0, r.start) + r.text + t.slice(r.end) : t);
+test("styleSpan wraps the selection and keeps only its text selected", () => {
+  const t = "Hello world here", r = E.styleSpan(t, 6, 11, "color", "#FF0000");
+  const u = apply(t, r);
+  assert.strictEqual(u, 'Hello <span style="color:#FF0000">world</span> here');
+  assert.strictEqual(u.slice(r.selStart, r.selEnd), "world");
+});
+test("styleSpan updates the span around exactly the selection (no nesting) and removes it when empty", () => {
+  let t = 'Hello <span style="color:#FF0000">world</span> here';
+  const s = t.indexOf("world");
+  let r = E.styleSpan(t, s, s + 5, "font-size", "14pt"); t = apply(t, r);
+  assert.strictEqual(t, 'Hello <span style="color:#FF0000;font-size:14pt">world</span> here');
+  r = E.styleSpan(t, r.selStart, r.selEnd, "color", ""); t = apply(t, r);
+  r = E.styleSpan(t, r.selStart, r.selEnd, "font-size", ""); t = apply(t, r);
+  assert.strictEqual(t, "Hello world here");
+});
+test("styleSpan works line by line: list markers, table cells, no code", () => {
+  const t = "- one\n\n| a | b |\n|---|---|\n\n```\ncode\n```\n";
+  const u = apply(t, E.styleSpan(t, 0, t.length, "font-size", "8pt"));
+  assert.ok(u.startsWith('- <span style="font-size:8pt">one</span>'));
+  assert.ok(u.includes('| <span style="font-size:8pt">a</span> | <span style="font-size:8pt">b</span> |'));
+  assert.ok(u.includes("|---|---|") && u.includes("```\ncode\n```"));
+});
+test("setFrontMatter creates, changes and removes document settings", () => {
+  let t = "# T\n", r = E.setFrontMatter(t, "font-size", "12pt", 0, 0); t = apply(t, r);
+  assert.strictEqual(t, "---\nfont-size: 12pt\n---\n\n# T\n");
+  r = E.setFrontMatter(t, "font", "Times New Roman", 0, 0); t = apply(t, r);
+  assert.ok(t.includes("font: Times New Roman"));
+  t = apply(t, E.setFrontMatter(t, "font", "", 0, 0));
+  t = apply(t, E.setFrontMatter(t, "font-size", "", 0, 0));
+  assert.strictEqual(t, "# T\n");
+});

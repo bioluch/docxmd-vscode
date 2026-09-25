@@ -126,6 +126,17 @@
     pasteHtml: () => ED.pasteHtml()
   }) : { beforeRender() {}, annotateBlocks() {}, setBlocks() {}, close() {}, hideHandle() {}, busy: () => false };
 
+  // Toolbar text style: font, size, colour — of the selection, or of the whole document
+  // (front matter) when nothing is selected; also in Preview mode (media/textstyle.js)
+  if (window.DOCXMDTextStyle) DOCXMDTextStyle.attach({
+    root: $("#toolbar"), source: ta, pe: PE, previewEl: preview,
+    isPreview: () => mode() === "preview",
+    editRange: (s, e, text) => editRange(s, e, text),
+    render: () => renderNow(),
+    afterEdit: () => { if (typeof syncActiveLine === "function") syncActiveLine(); },
+    t: (k, v) => t(k, v), toast: (m) => info(m)
+  });
+
   /* ---------- preview ---------- */
   let renderTimer = null;
   function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(render, 160); }
@@ -141,6 +152,7 @@
     try { html = marked.parse(md); } catch (e) { html = "<p>" + escapeHtml(e.message || "") + "</p>"; }
     if (marks) { MD2DOCX.setBlockMarks(false); PE.setBlocks(MD2DOCX.blocks(), md); }
     preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k", "data-b"], ADD_TAGS: ["input"] });
+    if (window.MD2DOCX && MD2DOCX.applyDocFont) MD2DOCX.applyDocFont(preview, md);   // front matter font / font-size
     PE.annotateBlocks(preview);
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     enhanceTables(preview);
@@ -1063,39 +1075,13 @@
   paintEditor();
 
   /* ---------- Word (.docx) → Markdown (same pipeline as the PWA) ---------- */
-  function cleanDocxHtml(html) {
-    const tpl = document.createElement("template");
-    tpl.innerHTML = html;
-    tpl.content.querySelectorAll("td p, th p").forEach((p) => {
-      const table = p.closest("table");
-      if (table && table.hasAttribute("data-docxmd-quote")) return;
-      const cell = p.parentNode;
-      if (p.previousElementSibling) cell.insertBefore(table && table.hasAttribute("data-docxmd-html") ? document.createElement("br") : document.createTextNode(" "), p);
-      while (p.firstChild) cell.insertBefore(p.firstChild, p);
-      p.remove();
-    });
-    return tpl.innerHTML;
-  }
   async function importDocx(b64, fileBase) {
     try {
-      if (!window.mammoth || !window.TurndownService) throw new Error("import libraries failed to load");
+      if (!window.DOCXFMT || !DOCXFMT.toMarkdown) throw new Error("import libraries failed to load");
       const bin = atob(b64); const u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-      const ab = u8.buffer;
-      const result = await mammoth.convertToHtml({ arrayBuffer: ab },
-        { styleMap: ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
-          .concat(window.DOCXFMT && DOCXFMT.highlightStyleMap ? DOCXFMT.highlightStyleMap() : [])
-          .concat(window.DOCXFMT && DOCXFMT.codeStyleMap ? DOCXFMT.codeStyleMap() : []) });
-      const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*", strongDelimiter: "**", hr: "---" });
-      if (window.turndownPluginGfm) td.use(window.turndownPluginGfm.gfm);
-      td.keep(["sub", "sup"]);
-      if (window.DOCXFMT && DOCXFMT.markdownRules) DOCXFMT.markdownRules(td);   // "<tag>" / "&x;" typed in Word stay text
-      let html = result.value || "";
-      if (window.DOCXFMT) { DOCXFMT.tableRule(td); html = DOCXFMT.apply(html, await DOCXFMT.extract(ab)); }
-      let md = td.turndown(cleanDocxHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
-      // Word header / footer / page numbers → YAML front matter (a title equal to the file name is not repeated, as in the PWA)
-      const meta = window.DOCXFMT && DOCXFMT.extractMeta ? await DOCXFMT.extractMeta(ab, fileBase || "") : null;
-      if (meta) md = DOCXFMT.frontMatterText(meta) + md;
+      // mammoth + table colours / widths, picture sizes, font sizes, alignment, front matter (shared with the PWA)
+      const md = await DOCXFMT.toMarkdown(u8.buffer, fileBase || "");
       clearTimeout(editTimer); editTimer = null;
       applying = true; ta.value = md; applying = false; render();
       vscode.postMessage({ type: "imported", text: md });

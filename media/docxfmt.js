@@ -3,7 +3,12 @@
    from word/document.xml and put them back onto mammoth's HTML tables as inline
    styles. Tables that carry such formatting are then kept as HTML in the Markdown
    (a pipe table can't hold colours); md2docx turns them back into Word tables.
-   Exposes: window.DOCXFMT.extract(arrayBuffer) -> Promise<fmt|null>
+   Font sizes, paragraph alignment and table column widths are carried over as well
+   (mammoth drops them): run sizes → <span style="font-size:…pt">, the document's main
+   size → front matter `font-size:`, centred / right-aligned paragraphs → <div align>,
+   Word's column grid → <colgroup> on an HTML table.
+   Exposes: window.DOCXFMT.toMarkdown(arrayBuffer, fileBase) -> Promise<markdown>
+            window.DOCXFMT.extract(arrayBuffer) -> Promise<fmt|null>
             window.DOCXFMT.apply(html, fmt) -> html
             window.DOCXFMT.tableRule(turndownService) */
 (function (global) {
@@ -79,12 +84,14 @@
     if (fill) f.fill = fill;
     const va = VA[wval(kid(tcPr, "vAlign"))];
     if (va) f.valign = va;
-    // horizontal alignment: first paragraph that has text
-    for (const p of ownDescendants(tc, "p")) {
-      if (!ownDescendants(p, "t").some((t) => t.textContent.trim())) continue;
-      const jc = JC[wval(kid(kid(p, "pPr"), "jc"))];
+    // horizontal alignment: first paragraph that has text (a cell with only a
+    // picture: the picture's paragraph)
+    const paras = ownDescendants(tc, "p");
+    const lead = paras.find((p) => ownDescendants(p, "t").some((t) => t.textContent.trim())) ||
+      paras.find((p) => p.getElementsByTagNameNS(NS_WP, "inline").length || p.getElementsByTagNameNS(NS_WP, "anchor").length || p.getElementsByTagNameNS(NS_V, "imagedata").length);
+    if (lead) {
+      const jc = JC[wval(kid(kid(lead, "pPr"), "jc"))];
       if (jc && jc !== "left") f.align = jc;
-      break;
     }
     // text colour: only when every text run agrees
     const colors = new Set();
@@ -113,12 +120,40 @@
     return borderOn(kid(bd, "left")) && !borderOn(kid(bd, "top")) && !borderOn(kid(bd, "right")) && !borderOn(kid(bd, "bottom"));
   }
 
+  // Word's column grid as % of the table: [46.4, 53.6]
+  function gridCols(tbl) {
+    const w = kids(kid(tbl, "tblGrid"), "gridCol").map((g) => +wval(g, "w") || 0);
+    const sum = w.reduce((a, b) => a + b, 0);
+    if (w.length < 2 || !sum || w.some((x) => !x)) return null;
+    return w.map((x) => Math.round(x / sum * 1000) / 10);
+  }
+  // text column of the (last) section in twips
+  function textWidth(doc) {
+    const ss = doc.getElementsByTagNameNS(W, "sectPr"), sp = ss[ss.length - 1];
+    const pg = kid(sp, "pgSz"), mar = kid(sp, "pgMar");
+    const w = +wval(pg, "w") || 11906;
+    return Math.max(1440, w - (+wval(mar, "left") || 1440) - (+wval(mar, "right") || 1440));
+  }
+  // table width as % of the text column (null: auto / full width)
+  function tableWidth(tbl, textW) {
+    const tw = kid(kid(tbl, "tblPr"), "tblW"), type = wval(tw, "type"), v = +wval(tw, "w") || 0;
+    let pct = null;
+    if (type === "pct" && v) pct = /%$/.test(wval(tw, "w")) ? parseFloat(wval(tw, "w")) : v / 50;
+    else if (type === "dxa" && v) pct = v / textW * 100;
+    else {
+      const grid = kids(kid(tbl, "tblGrid"), "gridCol").reduce((a, g) => a + (+wval(g, "w") || 0), 0);
+      if (grid) pct = grid / textW * 100;
+    }
+    return pct == null ? null : Math.max(10, Math.min(100, Math.round(pct)));
+  }
+
   async function extract(ab) {
     try {
       const xml = await readZipEntry(ab, "word/document.xml");
       if (!xml || typeof DOMParser === "undefined") return null;
       const doc = new DOMParser().parseFromString(xml, "application/xml");
       const tables = [];
+      const textW = textWidth(doc);
       for (const tbl of Array.from(doc.getElementsByTagNameNS(W, "tbl"))) {
         if (isQuoteTable(tbl)) {
           const c = hex(wval(kid(kid(kid(tbl, "tblPr"), "tblBorders"), "left"), "color"));
@@ -141,7 +176,7 @@
             delete f.autoColor;
             return f;
           }));
-        tables.push({ rows });
+        tables.push({ rows, cols: gridCols(tbl), width: tableWidth(tbl, textW) });
       }
       return { tables, images: extractImages(doc) };
     } catch (e) {
@@ -176,19 +211,24 @@
           const ext = c.getElementsByTagNameNS(NS_A, "ext")[0];
           let cx = ext ? +ext.getAttribute("cx") : 0;
           if (!cx) { let p = c.parentNode; while (p && !(p.namespaceURI === NS_WP && (p.localName === "inline" || p.localName === "anchor"))) p = p.parentNode; const e = p && p.getElementsByTagNameNS(NS_WP, "extent")[0]; cx = e ? +e.getAttribute("cx") : 0; }
-          out.push({ emu: cx, colEmu, inTable });
+          out.push({ emu: cx, colEmu, inTable, align: paraAlign(c) });
           continue;
         }
         if (c.namespaceURI === NS_V && c.localName === "imagedata") {
           let sh = c.parentNode; const m = /(?:^|;)\s*width\s*:\s*([\d.]+)(pt|in|cm|mm|px)?/i.exec(sh && sh.getAttribute ? sh.getAttribute("style") || "" : "");
           const k = { pt: 12700, in: 914400, cm: 360000, mm: 36000, px: EMU_PX }[(m && m[2] || "pt").toLowerCase()];
-          out.push({ emu: m ? +m[1] * k : 0, colEmu, inTable });
+          out.push({ emu: m ? +m[1] * k : 0, colEmu, inTable, align: paraAlign(c) });
           continue;
         }
         walk(c, inTable || (c.namespaceURI === W && c.localName === "tbl"));
       }
     })(body, false);
     return out;
+  }
+  function paraAlign(n) {
+    while (n && !(n.namespaceURI === W && n.localName === "p")) n = n.parentNode;
+    const jc = n && JC[wval(kid(kid(n, "pPr"), "jc"))];
+    return jc === "center" || jc === "right" ? jc : null;
   }
   // width="NN%" (share of the text column) on body images, width="NNN" (px) in
   // tables, where a percentage would be relative to the cell instead
@@ -204,7 +244,12 @@
     const imgs = Array.from(tpl.content.querySelectorAll("img"));
     // footnote/endnote pictures come after the body ones; fewer <img> → can't pair
     if (imgs.length < fmt.images.length) return html;
-    fmt.images.forEach((im, i) => { const w = imageWidth(im); if (w && w !== "100%") imgs[i].setAttribute("width", w); });
+    fmt.images.forEach((im, i) => {
+      const w = imageWidth(im); if (w && w !== "100%") imgs[i].setAttribute("width", w);
+      // a styled paragraph (no alignment class from the transform) still keeps its centring
+      const p = imgs[i].closest("p");
+      if (im.align && p && !/\bdocxmd-align-/.test(p.className)) p.classList.add("docxmd-align-" + im.align);
+    });
     return tpl.innerHTML;
   }
 
@@ -246,6 +291,10 @@
           else if (colAlign[ci] !== a) rich = true;
         });
       });
+      // unequal Word columns: only an HTML table can keep their widths
+      if (tf.cols && Math.max(...tf.cols) - Math.min(...tf.cols) > 100 / tf.cols.length * 0.3) rich = true;
+      if (rich && tf.cols) table.setAttribute("data-docxmd-cols", tf.cols.join(","));
+      if (rich && tf.width) table.setAttribute("data-docxmd-width", String(tf.width));
       if (rich) table.setAttribute("data-docxmd-html", "1");
       else if (rows[0]) Array.from(rows[0].cells).forEach((c, ci) => {
         // plain table with per-column alignment → GFM pipe table with :--: markers
@@ -265,7 +314,13 @@
 
   // Pretty, blank-line-free HTML so the whole table stays one Markdown HTML block
   function tableHtml(table) {
-    const out = ["<table>"];
+    const cols = (table.getAttribute("data-docxmd-cols") || "").split(",").filter(Boolean);
+    const tw = table.getAttribute("data-docxmd-width");
+    // Word's column widths: a fixed layout, so pictures shrink to their column
+    const st = cols.length ? ["width:" + (tw || 100) + "%", "table-layout:fixed"] : [];
+    if (getCss(table, "font-size")) st.push("font-size:" + getCss(table, "font-size"));
+    const out = [st.length ? '<table style="' + st.join(";") + '">' : "<table>"];
+    if (cols.length) out.push("<colgroup>" + cols.map((c) => '<col style="width:' + c + '%">').join("") + "</colgroup>");
     const attrs = (el) => ["colspan", "rowspan", "style"].filter((a) => el.hasAttribute(a))
       .map((a) => " " + a + '="' + el.getAttribute(a).replace(/"/g, "&quot;") + '"').join("");
     const cellHtml = (c) => {
@@ -531,6 +586,215 @@
     return td;
   }
 
+
+  // ---- font sizes & paragraph alignment (mammoth transforms) ------------------
+  // Size of the Normal text in pt: docDefaults, then the default paragraph style
+  // (Word's own fallback is 10 pt).
+  function baseSize(stylesXml) {
+    if (!stylesXml) return 11;
+    const doc = new DOMParser().parseFromString(stylesXml, "application/xml");
+    let sz = null;
+    const dd = doc.getElementsByTagNameNS(W, "docDefaults")[0];
+    const d = dd && dd.getElementsByTagNameNS(W, "sz")[0];
+    if (d) sz = +wval(d) / 2;
+    for (const st of Array.from(doc.getElementsByTagNameNS(W, "style"))) {
+      if (wval(st, "type") !== "paragraph" || !/^(1|true)$/.test(wval(st, "default") || "")) continue;
+      const x = kid(kid(st, "rPr"), "sz"); if (x) sz = +wval(x) / 2;
+    }
+    return sz || 10;
+  }
+  // style attribute helpers (string-based: identical in every DOM implementation)
+  function getCss(el, prop) {
+    const m = new RegExp("(?:^|;)\\s*" + prop + "\\s*:\\s*([^;]+)", "i").exec((el && el.getAttribute && el.getAttribute("style")) || "");
+    return m ? m[1].trim() : "";
+  }
+  function setCss(el, prop, val) {
+    const rest = String(el.getAttribute("style") || "").split(";").map((x) => x.trim())
+      .filter((x) => x && x.split(":")[0].trim().toLowerCase() !== prop);
+    if (val) rest.push(prop + ":" + val);
+    if (rest.length) el.setAttribute("style", rest.join(";")); else el.removeAttribute("style");
+  }
+  const sizeClass = (pt) => "docxmd-fs-" + String(pt).replace(".", "_");
+  const HEAD_STYLE = /^(heading|title|subtitle|toc|caption)\b/i;
+  // styleMap lines + transformDocument for mammoth. Runs whose size differs from
+  // the document's main size get a style name that maps to <span class="docxmd-fs-N">;
+  // centred / right-aligned plain paragraphs → <p class="docxmd-align-…">.
+  // Headings keep the size of their level. keep: run styles already mapped elsewhere.
+  function sizeAlignImport(docXml, base, keep) {
+    const M = global.mammoth, tf = M && M.transforms;
+    const res = { styleMap: [], transformDocument: null, docSize: base };
+    if (!tf) return res;
+    const sizes = new Set([base]);
+    String(docXml || "").replace(/<w:sz w:val="(\d+)"/g, (x, v) => { sizes.add(+v / 2); return x; });
+    sizes.forEach((pt) => res.styleMap.push("r[style-name='" + sizeClass(pt) + "'] => span." + sizeClass(pt)));
+    ["center", "right"].forEach((a) => res.styleMap.push("p[style-name='docxmd-align-" + a + "'] => p.docxmd-align-" + a + ":fresh"));
+    const chars = (r) => (r.children || []).reduce((n, c) => n + (c.type === "text" ? String(c.value || "").replace(/\s/g, "").length : 0), 0);
+    const isHead = (p) => HEAD_STYLE.test(p.styleName || "");
+    res.transformDocument = (doc) => {
+      // pass 1: the size most paragraphs are written in (each paragraph votes with the
+      // size of most of its text — a few long 8 pt logs must not outvote the body text)
+      const count = new Map();
+      tf.paragraph((p) => {
+        if (isHead(p)) return p;
+        const own = new Map();
+        tf.run((r) => { const n = chars(r); if (n) { const k = r.fontSize || base; own.set(k, (own.get(k) || 0) + n); } return r; })(p);
+        let k = null, m = 0; own.forEach((n, x) => { if (n > m) { m = n; k = x; } });
+        if (k != null) count.set(k, (count.get(k) || 0) + 1);
+        return p;
+      })(doc);
+      let best = -1; count.forEach((n, k) => { if (n > best) { best = n; res.docSize = k; } });
+      // pass 2: mark the runs that differ from it, and aligned paragraphs
+      return tf.paragraph((p) => {
+        let q = p;
+        if (!isHead(p)) q = tf.run((r) => {
+          const k = r.fontSize || base;
+          if (k === res.docSize || !chars(r) || (r.styleName && keep.has(r.styleName)) || !sizes.has(k)) return r;
+          return Object.assign({}, r, { styleName: sizeClass(k) });
+        })(q);
+        if (!q.styleName && (q.alignment === "center" || q.alignment === "right")) q = Object.assign({}, q, { styleName: "docxmd-align-" + q.alignment });
+        return q;
+      })(doc);
+    };
+    return res;
+  }
+  // <span class="docxmd-fs-8"> → <span style="font-size:8pt">
+  function inlineSizes(root) {
+    root.querySelectorAll('span[class*="docxmd-fs-"]').forEach((sp) => {
+      const m = /docxmd-fs-(\d+(?:_\d+)?)/.exec(sp.className);
+      sp.classList.remove(m[0]); if (!sp.classList.length) sp.removeAttribute("class");
+      setCss(sp, "font-size", m[1].replace("_", ".") + "pt");
+    });
+  }
+  // Fewer spans: neighbouring spans with the same style are merged; a cell whose
+  // text is all one size carries it on the <td>, a table whose cells agree on the <table>.
+  const sizeOfSpan = (el) => (el && el.nodeName === "SPAN" ? getCss(el, "font-size") : "");
+  function mergeSpans(root) {
+    root.querySelectorAll("span[style]").forEach((sp) => {
+      if (!sp.parentNode) return;
+      let n = sp.nextSibling;
+      while (n) {
+        const gap = n.nodeType === 3 && !n.nodeValue.trim() ? n : null;
+        const nx = gap ? gap.nextSibling : n;
+        if (!nx || nx.nodeName !== "SPAN" || nx.getAttribute("style") !== sp.getAttribute("style")) break;
+        if (gap) sp.appendChild(gap);
+        while (nx.firstChild) sp.appendChild(nx.firstChild);
+        n = nx.nextSibling; nx.remove();
+      }
+    });
+  }
+  function unwrapSize(scope) {
+    scope.querySelectorAll("span[style]").forEach((sp) => {
+      setCss(sp, "font-size", "");
+      if (!sp.hasAttribute("style")) { while (sp.firstChild) sp.parentNode.insertBefore(sp.firstChild, sp); sp.remove(); }
+    });
+  }
+  function hoistSizes(root) {
+    root.querySelectorAll('table[data-docxmd-html="1"]').forEach((table) => {
+      const cellSizes = [];
+      Array.from(table.querySelectorAll("td,th")).filter((c) => c.closest("table") === table).forEach((cell) => {
+        const sizes = new Set();
+        const walker = document.createTreeWalker(cell, 4);
+        for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+          if (!t.nodeValue.trim() || t.parentNode.closest("table") !== table) continue;
+          let e = t.parentNode, sz = "";
+          while (e && e !== cell && !sz) { sz = sizeOfSpan(e); e = e.parentNode; }
+          sizes.add(sz);
+        }
+        if (sizes.size === 1 && [...sizes][0]) { setCss(cell, "font-size", [...sizes][0]); unwrapSize(cell); }
+        if (sizes.size) cellSizes.push(sizes.size === 1 ? getCss(cell, "font-size") : "*");
+        else cellSizes.push(null);
+      });
+      const set = new Set(cellSizes.filter((x) => x !== null));
+      if (set.size === 1 && [...set][0] && [...set][0] !== "*") {
+        setCss(table, "font-size", [...set][0]);
+        Array.from(table.querySelectorAll("td,th")).filter((c) => c.closest("table") === table).forEach((c) => setCss(c, "font-size", ""));
+      }
+    });
+  }
+  // Paragraphs inside cells: HTML tables keep them as line breaks (Markdown tables:
+  // spaces); a centred paragraph among others becomes <div style="text-align:…">.
+  // Consecutive aligned body paragraphs are grouped into one <div data-docxmd-align>.
+  function cleanHtml(html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    inlineSizes(tpl.content);
+    const alignOf = (p) => { const m = /\bdocxmd-align-(center|right)\b/.exec(p.className || ""); return m ? m[1] : null; };
+    tpl.content.querySelectorAll("td p, th p").forEach((p) => {
+      const table = p.closest("table");
+      if (table && table.hasAttribute("data-docxmd-quote")) return; // becomes a blockquote
+      const cell = p.parentNode, html = table && table.hasAttribute("data-docxmd-html");
+      const al = alignOf(p), cellAl = getCss(cell, "text-align") || "left";
+      if (html && al && al !== cellAl) {
+        const d = document.createElement("div"); setCss(d, "text-align", al);
+        while (p.firstChild) d.appendChild(p.firstChild);
+        p.replaceWith(d);
+        return;
+      }
+      if (p.previousElementSibling && p.previousElementSibling.nodeName !== "DIV") cell.insertBefore(html ? document.createElement("br") : document.createTextNode(" "), p);
+      while (p.firstChild) cell.insertBefore(p.firstChild, p);
+      p.remove();
+    });
+    mergeSpans(tpl.content);
+    hoistSizes(tpl.content);
+    // body: runs of centred / right paragraphs → one wrapper
+    Array.from(tpl.content.querySelectorAll("p")).forEach((p) => {
+      const al = alignOf(p); if (!al || p.closest("td,th,li,blockquote")) return;
+      const prev = p.previousElementSibling;
+      if (prev && prev.nodeName === "DIV" && prev.getAttribute("data-docxmd-align") === al) { prev.appendChild(p); return; }
+      const d = document.createElement("div"); d.setAttribute("data-docxmd-align", al);
+      p.replaceWith(d); d.appendChild(p);
+    });
+    tpl.content.querySelectorAll('p[class*="docxmd-align-"]').forEach((p) => { p.className = p.className.replace(/\s*docxmd-align-\w+/g, "").trim(); if (!p.className) p.removeAttribute("class"); });
+    return tpl.innerHTML;
+  }
+  // Turndown: aligned groups → <div align="…"> around Markdown; sized / coloured /
+  // font spans stay inline HTML around their (Markdown) content.
+  function formatRules(td) {
+    td.addRule("docxmdAlign", {
+      filter: (n) => n.nodeName === "DIV" && n.hasAttribute("data-docxmd-align"),
+      replacement: (content, node) => '\n\n<div align="' + node.getAttribute("data-docxmd-align") + '">\n\n' + content.replace(/^\n+|\n+$/g, "") + "\n\n</div>\n\n"
+    });
+    td.addRule("docxmdStyledSpan", {
+      filter: (n) => n.nodeName === "SPAN" && /font-size|font-family|color/i.test(n.getAttribute("style") || ""),
+      replacement: (content, node) => (content.trim() ? '<span style="' + node.getAttribute("style").replace(/"/g, "'") + '">' + content + "</span>" : content)
+    });
+    return td;
+  }
+
+  // The whole Word → Markdown import (PWA and VS Code webview):
+  // mammoth + our transforms → HTML → table/picture/structure formatting → Turndown
+  // → front matter (header / footer / page numbers / main font size).
+  async function toMarkdown(ab, fileBase) {
+    const M = global.mammoth;
+    if (!M || !global.TurndownService) throw new Error("import libraries failed to load");
+    const [docXml, stylesXml] = await Promise.all([readZipEntry(ab, "word/document.xml"), readZipEntry(ab, "word/styles.xml")]);
+    const styleMap = ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
+      .concat(highlightStyleMap(), codeStyleMap());
+    const keep = new Set(styleMap.map((x) => (/^r\[style-name='([^']+)'\]/.exec(x) || [])[1]).filter(Boolean));
+    let fa = { styleMap: [], transformDocument: null, docSize: null };
+    try { fa = sizeAlignImport(docXml, baseSize(stylesXml), keep); } catch (e) { console.warn("DOCXFMT sizes", e); }
+    const opts = { styleMap: styleMap.concat(fa.styleMap) };
+    if (fa.transformDocument) opts.transformDocument = fa.transformDocument;
+    const result = await M.convertToHtml({ arrayBuffer: ab }, opts);
+    const td = new global.TurndownService({
+      headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-",
+      emDelimiter: "*", strongDelimiter: "**", hr: "---"
+    });
+    if (global.turndownPluginGfm) td.use(global.turndownPluginGfm.gfm);
+    td.keep(["sub", "sup"]);
+    markdownRules(td);              // "<tag>" / "&x;" typed in Word stay text
+    formatRules(td);
+    tableRule(td);
+    // mammoth ignores table colours / alignment / widths: read them from the XML ourselves
+    const html = apply(result.value || "", await extract(ab));
+    let md = td.turndown(cleanHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    // Word header / footer / page numbers / main size → YAML front matter (exported back the same way)
+    let meta = await extractMeta(ab, fileBase || "");
+    if (fa.docSize && fa.docSize !== 11) meta = Object.assign(meta || {}, { "font-size": fa.docSize + "pt" });
+    if (meta) md = frontMatterText(meta) + md;
+    return md;
+  }
+
   // ---- header / footer / document properties → YAML front matter -------------
   const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   // Text of a header/footer part: PAGE → {n}, NUMPAGES → {N}, tabs kept as \t.
@@ -617,5 +881,5 @@
     return "---\n" + keys.map((k) => k + ": " + q(String(meta[k]))).join("\n") + "\n---\n\n";
   }
 
-  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry, extractMeta, frontMatterText, highlightStyleMap, codeStyleMap, markdownRules };
+  global.DOCXFMT = { toMarkdown, cleanHtml, formatRules, baseSize, extract, apply, structure, tableRule, readZipEntry, extractMeta, frontMatterText, highlightStyleMap, codeStyleMap, markdownRules };
 })(typeof window !== "undefined" ? window : this);

@@ -90,17 +90,19 @@
     return st ? st[1] : a ? a[1] : "";
   }
   // Word size (px) of an image for a width value; no width → natural size
-  function sizeFor(info, width) {
+  function sizeFor(info, width, maxW) {
     let w = info.width, h = info.height;
     const m = /^([\d.]+)(%|px|cm|mm|in)?$/.exec(String(width || "").trim());
     if (m && +m[1] > 0) {
       const target = m[2] === "%" ? MAX_IMG_W * Math.min(100, +m[1]) / 100 : Math.min(MAX_IMG_W, +m[1] * UNIT_PX[m[2] || ""]);
       h = Math.round(h * target / w); w = Math.round(target);
     }
+    // inside a table cell: never wider than the column
+    if (maxW && w > maxW) { h = Math.round(h * maxW / w); w = Math.round(maxW); }
     return { width: Math.max(1, w), height: Math.max(1, h) };
   }
-  function imageRun(info, width, D) {
-    return new D.ImageRun({ data: info.data, type: info.type, transformation: sizeFor(info, width) });
+  function imageRun(info, width, D, maxW) {
+    return new D.ImageRun({ data: info.data, type: info.type, transformation: sizeFor(info, width, maxW) });
   }
   function parseHtmlFragment(raw) {
     if (typeof global.DOMParser === "undefined") return null;
@@ -312,7 +314,9 @@
               if (info) runs.push(imageRun(info, htmlImgWidth(el), D));
               continue;
             }
-            const fmt = HTML_FMT[tag];
+            // <span style="font-size / font-family / color">, <font color face size>
+            const fmt = HTML_FMT[tag] || ((tag === "span" || tag === "font") && !m[1] ? tagStyle(m[0]) : null) ||
+              ((tag === "span" || tag === "font") && m[1] ? {} : null);
             if (!fmt || m[3]) continue;
             if (!m[1]) { htmlStack.push({ tag, prev: style }); style = Object.assign({}, style, fmt); }
             else {
@@ -350,6 +354,7 @@
       size: style.size || undefined,
       subScript: style.sub || undefined,
       highlight: style.highlight || undefined,
+      font: style.font || undefined,
       color: style.color
     });
   }
@@ -555,6 +560,59 @@
     });
     return out;
   }
+  // CSS font size → Word half-points (pt, px, em/rem/% of 11 pt, HTML <font size=1..7>)
+  const FONT_TAG_PT = [0, 7.5, 10, 12, 13.5, 18, 24, 36];
+  function cssSizeHp(v) {
+    const m = /^([\d.]+)\s*(pt|px|em|rem|%)?$/i.exec(String(v || "").trim());
+    if (!m || !(+m[1] > 0)) return null;
+    const n = +m[1], u = (m[2] || "px").toLowerCase();
+    const pt = u === "pt" ? n : u === "px" ? n * 0.75 : u === "%" ? 11 * n / 100 : 11 * n;
+    return Math.max(2, Math.min(3276, Math.round(pt * 2)));
+  }
+  // front matter `font-size: 12` / `12pt` / `16px` → half-points (a bare number is pt, as in Word)
+  const docSizeHp = (meta) => { const v = metaText(meta && meta["font-size"]).trim(); return cssSizeHp(/^[\d.]+$/.test(v) ? v + "pt" : v); };
+  // front matter font / font-size → CSS for the preview: { family, size } (null when absent)
+  function docFont(md) {
+    const fm = parseFrontMatter(md), meta = fm ? fm.meta : null;
+    if (!meta) return null;
+    const hp = docSizeHp(meta), fam = cssFont(metaText(meta.font));
+    return hp || fam ? { size: hp ? hp / 2 + "pt" : "", family: fam || "" } : null;
+  }
+  // Preview: front matter font / font-size on the rendered document (.doc-fs / .doc-font +
+  // CSS variables; headings keep the size they have without it — --hb = the base size)
+  function applyDocFont(el, md) {
+    if (!el || !el.classList) return;
+    el.classList.remove("doc-fs", "doc-font");
+    ["--doc-fs", "--doc-font", "--hb"].forEach((v) => el.style.removeProperty(v));
+    const f = docFont(md);
+    if (!f) return;
+    if (f.size) {
+      el.style.setProperty("--hb", global.getComputedStyle ? global.getComputedStyle(el).fontSize : "16px");
+      el.style.setProperty("--doc-fs", f.size);
+      el.classList.add("doc-fs");
+    }
+    if (f.family) { el.style.setProperty("--doc-font", '"' + f.family.replace(/["\\;{}<>]/g, "") + '"'); el.classList.add("doc-font"); }
+  }
+  // font-family list → the first family name
+  const cssFont = (v) => { const f = String(v || "").split(",")[0].trim().replace(/^["']|["']$/g, ""); return f && !/^(inherit|initial|serif|sans-serif|monospace|system-ui)$/i.test(f) ? f : null; };
+  function cssRunFmt(css, st) {
+    const hp = cssSizeHp(css["font-size"]); if (hp) st.size = hp;
+    const f = cssFont(css["font-family"]); if (f) st.font = f;
+    const c = cssColor(css.color); if (c) st.color = c;
+    return st;
+  }
+  // formatting of an opening inline <span …> / <font …> tag
+  function tagStyle(raw) {
+    const b = parseHtmlFragment(raw.replace(/\/?>$/, "></" + (/^<font/i.test(raw) ? "font" : "span") + ">")), el = b && b.firstElementChild;
+    if (!el) return {};
+    const st = cssRunFmt(cssProps(el), {});
+    if (el.nodeName === "FONT") {
+      const c = cssColor(el.getAttribute("color")); if (c) st.color = c;
+      const f = cssFont(el.getAttribute("face")); if (f) st.font = f;
+      const n = parseInt(el.getAttribute("size"), 10); if (n >= 1 && n <= 7) st.size = FONT_TAG_PT[n] * 2;
+    }
+    return st;
+  }
   function elFmt(el, style) {
     const css = cssProps(el), st = Object.assign({}, style);
     const tag = el.nodeName.toLowerCase();
@@ -566,16 +624,18 @@
     if (css["font-style"] === "italic") st.italics = true;
     if (/underline/.test(css["text-decoration"] || "")) st.underline = true;
     if (/line-through/.test(css["text-decoration"] || "")) st.strike = true;
+    const hp = cssSizeHp(css["font-size"]); if (hp) st.size = hp;
+    const f = cssFont(css["font-family"] || (tag === "font" ? el.getAttribute("face") : "")); if (f) st.font = f;
     return st;
   }
 
   const HTML_BLOCK = /^(p|div|ul|ol|li|h[1-6]|blockquote|pre|table)$/i;
   // Walk a cell's DOM into Word paragraphs (inline runs + simple block handling)
-  function htmlCellChildren(cell, style, align, ctx) {
+  function htmlCellChildren(cell, style, align, ctx, maxW) {
     const D = ctx.D, out = [];
-    let runs = [];
+    let runs = [], curAlign = align;
     const flush = (force) => {
-      if (runs.length || force) out.push(new D.Paragraph({ children: runs, alignment: mapAlign(align, D), spacing: { after: 0 } }));
+      if (runs.length || force) out.push(new D.Paragraph({ children: runs, alignment: mapAlign(curAlign, D), spacing: { after: 0 } }));
       runs = [];
     };
     (function walk(node, st, listInfo) {
@@ -590,7 +650,7 @@
         if (tag === "br") { runs.push(new D.TextRun({ text: "", break: 1 })); continue; }
         if (tag === "img") {
           const info = ctx.imgMap.get(n.getAttribute("src"));
-          if (info) runs.push(imageRun(info, htmlImgWidth(n), D));
+          if (info) runs.push(imageRun(info, htmlImgWidth(n), D, maxW));
           continue;
         }
         if (tag === "table") { flush(); out.push(buildHtmlTable(n, ctx)); continue; }
@@ -612,38 +672,58 @@
         }
         const block = HTML_BLOCK.test(tag);
         if (block) flush();
+        // a block with its own alignment (<div style="text-align:center"> around a picture)
+        const own = block ? (cssProps(n)["text-align"] || n.getAttribute("align") || "").toLowerCase() : "";
+        const saved = curAlign;
+        if (/^(left|right|center|justify)$/.test(own)) curAlign = own;
         const sec = /^sec:([A-Za-z0-9_-]+)$/.exec(n.getAttribute("id") || "");
         const before = runs.length;
         walk(n, /^h[1-6]$/.test(tag) ? Object.assign(elFmt(n, st), { bold: true }) : elFmt(n, st), listInfo);
         // <h3 id="sec:x"> → Word bookmark, target of internal links (#sec:x)
         if (sec) runs.splice(before, runs.length - before, new D.Bookmark({ id: bookmarkName("sec", sec[1]), children: runs.slice(before) }));
         if (block) flush();
+        curAlign = saved;
       }
     })(cell, style, null);
     flush(!out.length || !(out[out.length - 1] instanceof D.Paragraph));
     return out;
   }
 
+  const TEXT_TWIPS = 11906 - 2 * 1440;   // A4 text column (section margins below)
   function buildHtmlTable(table, ctx) {
     const D = ctx.D;
     const VAL = { middle: "center", center: "center", bottom: "bottom" };
     const rows = [];
+    // <table style="width:NN%; font-size:…"> + <colgroup><col style="width:NN%">: Word's
+    // column grid (imported tables) → fixed column widths; pictures never wider than their column
+    const tCss = cssProps(table);
+    const tPct = Math.max(10, Math.min(100, parseFloat(tCss.width) || 100));
+    const cols = Array.from(table.querySelectorAll("col")).filter((c) => c.closest("table") === table)
+      .map((c) => parseFloat(cssProps(c).width || c.getAttribute("width")) || 0);
+    const useCols = cols.length > 1 && cols.every((x) => x > 0);
+    const colTw = useCols ? cols.map((x) => Math.round(TEXT_TWIPS * tPct / 100 * x / cols.reduce((a, b) => a + b, 0))) : null;
+    const tStyle = cssRunFmt(tCss, {});
     for (const tr of Array.from(table.rows)) {
       const inHead = tr.parentNode && tr.parentNode.nodeName === "THEAD";
       const trCss = cssProps(tr);
+      let col = 0;
       const cells = Array.from(tr.cells).map((c) => {
+        const span = Math.max(1, c.colSpan || 1), at = col; col += span;
+        const cellTw = colTw ? colTw.slice(at, at + span).reduce((a, b) => a + b, 0) : 0;
         const css = cssProps(c);
         const header = c.nodeName === "TH";
         const fill = cssColor(css["background-color"] || css.background || c.getAttribute("bgcolor")) ||
                      cssColor(trCss["background-color"] || trCss.background || tr.getAttribute("bgcolor"));
         const align = (css["text-align"] || c.getAttribute("align") || "").toLowerCase() || null;
         const valign = VAL[(css["vertical-align"] || c.getAttribute("valign") || "").toLowerCase()];
-        const st = elFmt(c, header ? { bold: true } : {});
+        const st = elFmt(c, Object.assign({}, tStyle, header ? { bold: true } : {}));
         if (!st.color) { const trc = cssColor(trCss.color); if (trc) st.color = trc; }
+        const maxW = cellTw ? Math.max(24, Math.round((cellTw - 160) / 15)) : 0;   // twips → px, minus the cell margins
         const opts = {
-          children: htmlCellChildren(c, st, align, ctx),
+          children: htmlCellChildren(c, st, align, ctx, maxW),
           margins: { top: 40, bottom: 40, left: 80, right: 80 }
         };
+        if (cellTw) opts.width = { size: cellTw, type: D.WidthType.DXA };
         if (fill) opts.shading = { type: D.ShadingType.CLEAR, fill, color: "auto" };
         else if (header) opts.shading = { type: D.ShadingType.CLEAR, fill: "F0F0F0" };
         if (valign) opts.verticalAlign = valign;
@@ -653,9 +733,9 @@
       });
       if (cells.length) rows.push(new D.TableRow({ tableHeader: inHead || undefined, children: cells }));
     }
-    return new D.Table({
+    return new D.Table(Object.assign({
       rows,
-      width: { size: 100, type: D.WidthType.PERCENTAGE },
+      width: { size: useCols ? tPct : 100, type: D.WidthType.PERCENTAGE },
       borders: {
         top: { style: D.BorderStyle.SINGLE, size: 2, color: "CCCCCC" },
         bottom: { style: D.BorderStyle.SINGLE, size: 2, color: "CCCCCC" },
@@ -664,7 +744,7 @@
         insideHorizontal: { style: D.BorderStyle.SINGLE, size: 2, color: "DDDDDD" },
         insideVertical: { style: D.BorderStyle.SINGLE, size: 2, color: "DDDDDD" }
       }
-    });
+    }, useCols ? { columnWidths: colTw, layout: D.TableLayoutType.FIXED } : {}));
   }
 
   function parseHtmlTable(raw) {
@@ -1681,7 +1761,8 @@
         Array.from(ctx.olStarts, (n) => ({ reference: "docxmd-ol-" + n, levels: olLevels.map((l) => (l.level === 0 ? Object.assign({}, l, { start: n }) : l)) }))) },
       styles: {
         default: {
-          document: { run: { font: "Calibri", size: 22 }, paragraph: { spacing: { line: 276 } } }
+          // front matter `font:` / `font-size:` (the document's text font and size)
+          document: { run: { font: cssFont(metaText(meta.font)) || "Calibri", size: docSizeHp(meta) || 22 }, paragraph: { spacing: { line: 276 } } }
         },
         paragraphStyles: [
           { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 40, bold: true, color: "1a1a1a" }, paragraph: { spacing: { before: 240, after: 120 } } },
@@ -1706,6 +1787,6 @@
   global.MD2DOCX = { toBlob, ready, extensions, colorBoxExtension, boxColor, colorName, BOX_COLORS,
     CALLOUTS, calloutKind, calloutByColor, isDefaultCalloutTitle, isNumericCell, dataImageRanges, backdropHtml,
     markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, imageRanges, imageWidthEdit, widthCss,
-    parseFrontMatter, docStats, highlightName, HIGHLIGHTS, HL_FROM_WORD,
+    parseFrontMatter, docFont, applyDocFont, docStats, highlightName, HIGHLIGHTS, HL_FROM_WORD,
     setBlockMarks(on) { BLOCK_MARKS = !!on; }, blocks: () => (DOC.blocks || []).slice(), editContainers };
 })(typeof window !== "undefined" ? window : this);

@@ -504,11 +504,56 @@
       if (b && preview.contains(b)) { e.preventDefault(); window.getSelection().removeAllRanges(); openBlockEditor(+b.dataset.b); }
     });
 
+    // ---- toolbar actions from the preview (text style: font, size, colour) ----
+    // Source range of the current selection: the quick edit (its typed text is committed
+    // first) or a plain selection inside one paragraph / list item / table cell. null: none.
+    function sourceSelection() {
+      if (pe.block) return null;
+      if (!pe.quick) {
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount || sel.isCollapsed || !preview.contains(sel.anchorNode)) return null;
+        const rg = sel.getRangeAt(0), c = qeContainer(rg.startContainer);
+        const t0 = c ? textOffset(c, rg.startContainer, rg.startOffset) : 0, t1 = c ? textOffset(c, rg.endContainer, rg.endOffset) : 0;
+        if (!c || !c.contains(rg.endContainer) || !startQuickEdit(c, -1, -1)) return textSelection(rg);
+        setCaret(c, t0, t1);
+      }
+      let out = null;
+      quickOp((tx, s, e) => { out = { s, e }; return { start: s, end: s, text: "", selStart: s, selEnd: e }; }, false);
+      if (pe.quick) detachQuick();
+      return out && out.e > out.s ? out : null;
+    }
+    // A selection the quick edit cannot take (HTML blocks, e.g. imported tables): find the
+    // selected text in the block's source — the same occurrence (counted in the rendered
+    // block before the selection). { s, e } or { unmapped: true }.
+    function textSelection(rg) {
+      const txt = rg.toString();
+      const el = rg.startContainer.nodeType === 1 ? rg.startContainer : rg.startContainer.parentElement;
+      const b = el && el.closest("[data-b]");
+      const r = b && blockRange(+b.dataset.b);
+      if (!txt.trim() || /\n/.test(txt) || !r) return { unmapped: true };
+      const src = getText().slice(r.start, r.end);
+      const pre = document.createRange(); pre.setStart(b, 0); pre.setEnd(rg.startContainer, rg.startOffset);
+      let nth = 0, i = -1; const before = pre.toString();
+      while ((i = before.indexOf(txt, i + 1)) >= 0) nth++;
+      let at = -1; for (let k = 0; k <= nth; k++) { at = src.indexOf(txt, at + 1); if (at < 0) return { unmapped: true }; }
+      return { s: r.start + at, e: r.start + at + txt.length };
+    }
+    // re-open the quick edit on [s, e) after a toolbar edit (keeps the selection visible)
+    function reopenAt(s, e) { try { return startQuickEditAt(s, e); } catch (x) { return false; } }
+    // run fn(text, s, e) → mdedit action inside the open block editor; false: none open
+    function applyToBlock(fn) {
+      const b = pe.block; if (!b) return false;
+      const ta = b.ta, r = fn(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (r) { taApply(ta, r); ta.dispatchEvent(new Event("input")); }
+      return true;
+    }
+
     // a render replaces the preview DOM: close whatever editor is open first
     function beforeRender() { if (pe.block) closeBlockEditor(false); if (pe.quick) endQuickEdit(false); }
     function setBlocks(blocks, src) { pe.blocks = blocks || []; pe.src = src; }
     function close(apply) { if (pe.quick) endQuickEdit(apply); if (pe.block) closeBlockEditor(apply); }
-    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, busy: () => !!(pe.block || pe.quick) };
+    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, applyToBlock,
+      busy: () => !!(pe.block || pe.quick) };
   }
 
   global.DOCXMDPreviewEdit = { attach };

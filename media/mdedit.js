@@ -9,7 +9,7 @@
    The shells apply edits through the textarea (execCommand) so they are undoable.
 
    Exposes: window.DOCXMDEdit = { onKey, pasteLink, htmlToMarkdown, alignTable,
-     isRichHtml, lineStart, lineEnd } */
+     isRichHtml, styleSpan, setFrontMatter, lineStart, lineEnd } */
 (function (global) {
   "use strict";
 
@@ -350,6 +350,137 @@
     return md;
   }
 
+
+  /* ---------- Text style: <span style="font-size / font-family / color"> ---------- */
+  // "a:1;b:2" with prop set to value (value "" removes it)
+  function styleWith(style, prop, value) {
+    const out = String(style || "").split(";").map((x) => x.trim())
+      .filter((x) => x && x.split(":")[0].trim().toLowerCase() !== prop);
+    if (value) out.push(prop + ":" + value);
+    return out.join(";");
+  }
+  const SPAN_TAG_RE = /<span\b([^>]*)>|<\/span\s*>/gi;
+  const styleAttr = (attrs) => { const m = /\bstyle\s*=\s*(["'])(.*?)\1/i.exec(attrs || ""); return m ? m[2] : null; };
+  // Remove prop from the spans that open and close inside seg; a span left without
+  // any style / attribute disappears (its content stays).
+  function stripProp(seg, prop) {
+    const toks = [];
+    let m; SPAN_TAG_RE.lastIndex = 0;
+    while ((m = SPAN_TAG_RE.exec(seg))) toks.push({ at: m.index, len: m[0].length, open: m[0][1] !== "/", attrs: m[1] || "" });
+    const stack = [], edits = [];
+    for (const t of toks) {
+      if (t.open) { stack.push(t); continue; }
+      const o = stack.pop(); if (!o) continue;                  // closes a span opened before the selection
+      const st = styleAttr(o.attrs);
+      if (st == null || !new RegExp("(^|;)\\s*" + prop + "\\s*:", "i").test(st)) continue;
+      const ns = styleWith(st, prop, "");
+      const other = o.attrs.replace(/\bstyle\s*=\s*(["']).*?\1/i, "").trim();
+      if (!ns && !other) { edits.push({ at: o.at, len: o.len, text: "" }, { at: t.at, len: t.len, text: "" }); }
+      else edits.push({ at: o.at, len: o.len, text: "<span" + (other ? " " + other : "") + (ns ? ' style="' + ns + '"' : "") + ">" });
+    }
+    edits.sort((a, b) => b.at - a.at).forEach((x) => { seg = seg.slice(0, x.at) + x.text + seg.slice(x.at + x.len); });
+    return seg;
+  }
+  const BLOCK_MARK_RE = /^([ \t]*(?:>[ \t]?)*[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?|#{1,6}[ \t]+)?)/;
+  // Set a CSS property on the selected text: the span around exactly the selection is
+  // updated (no nesting); otherwise the same property inside the selection is removed and
+  // every line (table cell) of the selection is wrapped in <span style="prop:value">.
+  // value "" removes the property. Code blocks, front matter and table rules are skipped.
+  function styleSpan(text, s, e, prop, value) {
+    if (e <= s) return null;
+    prop = String(prop).toLowerCase();
+    // 1) the selection is exactly the content of a <span …>
+    const open = /<span\b([^>]*)>$/i.exec(text.slice(Math.max(0, s - 300), s));
+    if (open && /^<\/span\s*>/i.test(text.slice(e)) && !/<\/?span\b/i.test(text.slice(s, e))) {
+      const close = /^<\/span\s*>/i.exec(text.slice(e))[0];
+      const st = styleWith(styleAttr(open[1]) || "", prop, value);
+      const other = open[1].replace(/\bstyle\s*=\s*(["']).*?\1/i, "").trim();
+      const os = s - open[0].length, inner = text.slice(s, e);
+      const tag = st || other ? "<span" + (other ? " " + other : "") + (st ? ' style="' + st + '"' : "") + ">" : "";
+      return { start: os, end: e + close.length, text: tag + inner + (tag ? close : ""), selStart: os + tag.length, selEnd: os + tag.length + inner.length };
+    }
+    // 2) the selection is one whole <span …>…</span>
+    const whole = /^<span\b([^>]*)>([\s\S]*)<\/span\s*>$/i.exec(text.slice(s, e));
+    if (whole && !/<\/?span\b/i.test(whole[2])) {
+      const st = styleWith(styleAttr(whole[1]) || "", prop, value);
+      const other = whole[1].replace(/\bstyle\s*=\s*(["']).*?\1/i, "").trim();
+      const tag = st || other ? "<span" + (other ? " " + other : "") + (st ? ' style="' + st + '"' : "") + ">" : "";
+      const out = tag + whole[2] + (tag ? "</span>" : "");
+      return { start: s, end: e, text: out, selStart: s, selEnd: s + out.length };
+    }
+    // 3) line by line
+    const fm = /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(text);
+    const fmEnd = fm ? fm[0].length : 0;
+    let out = "", pos = s, changed = 0, innerAt = -1, innerLen = 0;
+    while (pos < e) {
+      const ls = lineStart(text, pos), le = Math.min(lineEnd(text, pos), e);
+      const line = text.slice(ls, lineEnd(text, pos));
+      let a = pos, b = le;
+      const skip = ls < fmEnd || inFence(text, ls) || /^[ \t]{0,3}(`{3,}|~{3,})/.test(line) || TABLE_SEP_RE.test(line) || /^[ \t]*<\/?[a-z][^>]*>[ \t]*$/i.test(line) || /^[ \t]*:::/.test(line);
+      if (!skip) {
+        if (a === ls) a = ls + BLOCK_MARK_RE.exec(line)[0].length;
+        if (a < b) {
+          // a table row: each cell on its own
+          const parts = TABLE_ROW_RE.test(line) ? cellRanges(line).map((c) => [ls + c.s, ls + c.e]).filter((r) => r[1] > a && r[0] < b).map((r) => [Math.max(r[0], a), Math.min(r[1], b)]) : [[a, b]];
+          let cur = a, seg = "";
+          for (const [x0, x1] of parts) {
+            let x = x0, y = x1;
+            while (x < y && /\s/.test(text[x])) x++;
+            while (y > x && /\s/.test(text[y - 1])) y--;
+            seg += text.slice(cur, x);
+            if (y > x) {
+              const inner = stripProp(text.slice(x, y), prop);
+              const tag = value ? '<span style="' + prop + ":" + value + '">' : "";
+              innerAt = out.length + text.slice(pos, a).length + seg.length + tag.length; innerLen = inner.length;
+              seg += tag + inner + (tag ? "</span>" : "");
+              changed++;
+            }
+            cur = y;
+          }
+          seg += text.slice(cur, b);
+          out += text.slice(pos, a) + seg;
+        } else out += text.slice(pos, b);
+      } else out += text.slice(pos, b);
+      if (le < e) out += text.slice(le, le + 1);   // the newline
+      pos = le + 1;
+    }
+    if (!changed) return null;
+    // one piece: keep only its text selected, so the next style lands on the same span
+    if (changed === 1 && value) return { start: s, end: e, text: out, selStart: s + innerAt, selEnd: s + innerAt + innerLen };
+    return { start: s, end: e, text: out, selStart: s, selEnd: s + out.length };
+  }
+
+  /* ---------- Document settings in the YAML front matter (font, font-size) ---------- */
+  // Set key: value in the front matter (created when missing; value "" removes the key and
+  // an emptied front matter). The selection [s, e) is kept on the same text.
+  function setFrontMatter(text, key, value, s, e) {
+    s = s || 0; e = e == null ? s : e;
+    const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n(---|\.\.\.)[ \t]*(\r?\n|$)/.exec(text);
+    const safe = (v) => (/^[\w\u0080-\uFFFF][^:#{}\[\]"'\n]*$/.test(v) && !/\s$/.test(v) ? v : '"' + String(v).replace(/(["\\])/g, "\\$1") + '"');
+    let start = 0, end = 0, out;
+    if (!m) {
+      if (!value) return null;
+      out = "---\n" + key + ": " + safe(value) + "\n---\n\n";
+    } else {
+      const lines = m[1].split(/\r?\n/);
+      const re = new RegExp("^" + key.replace(/[-]/g, "\\-") + "[ \\t]*:");
+      const i = lines.findIndex((l) => re.test(l));
+      if (i >= 0) {
+        // drop the key's continuation lines (indented / list items) too
+        let j = i + 1; while (j < lines.length && /^[ \t]+\S|^-[ \t]/.test(lines[j])) j++;
+        lines.splice(i, j - i, ...(value ? [key + ": " + safe(value)] : []));
+      } else if (value) lines.push(key + ": " + safe(value));
+      else return null;
+      end = m[0].length;
+      const kept = lines.filter((l) => l.trim());
+      out = kept.length ? "---\n" + lines.join("\n") + "\n" + m[2] + (m[3] || "\n") : "";
+      if (!out) { while (/[\r\n]/.test(text[end] || "")) end++; }   // no front matter left: drop the blank line after it
+    }
+    const d = out.length - (end - start);
+    const mv = (x) => (x >= end ? x + d : Math.min(x, start + out.length));
+    return { start, end, text: out, selStart: mv(s), selEnd: mv(e) };
+  }
+
   global.DOCXMDEdit = { onKey, onEnter, onTab, pasteLink, htmlToMarkdown, isRichHtml, alignTable, moveLines,
-    duplicateLines, toggleComment, wrapSelection, lineStart, lineEnd, inFence };
+    duplicateLines, toggleComment, wrapSelection, styleSpan, setFrontMatter, lineStart, lineEnd, inFence };
 })(typeof window !== "undefined" ? window : this);
