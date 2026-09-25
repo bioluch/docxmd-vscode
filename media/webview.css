@@ -259,3 +259,39 @@ body {
 .popover .hl-none { padding: 0 .12em; text-decoration: line-through; color: var(--text-muted); }
 .popover .kbd { font-size: .7rem; color: var(--text-muted); }
 .popover .pop-item .check { margin-left: auto; color: var(--accent); }
+
+/* ===== 0.2.0: syntax highlighting, line numbers, active line (same rules as the web app) ===== */
+/* --- editor backdrop in "lines" mode: one <div class="ln"> per source line --- */
+.find-backdrop .ln { position: relative; min-height: 1px; }
+.find-backdrop.hl-ln { counter-reset: ln; }
+.find-backdrop.hl-ln .ln { counter-increment: ln; }
+.find-backdrop.hl-ln .ln::before {
+  content: counter(ln); position: absolute; right: 100%; top: 0; width: 3.2em; padding-right: .8em;
+  text-align: right; color: var(--text-muted); opacity: .5; white-space: nowrap; pointer-events: none;
+}
+.find-backdrop .ln.ln-active { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.find-backdrop.hl-ln .ln.ln-active::before { opacity: 1; color: var(--accent); }
+#source.ln-on { padding-left: 3.8em !important; }
+/* syntax colouring: the backdrop shows the text, the textarea keeps caret and selection */
+#source.syn-on { color: transparent; caret-color: var(--text-main); }
+#source.syn-on::selection { color: transparent; background: var(--sel); }
+#source.syn-on::placeholder { color: var(--text-muted); }
+.find-backdrop.hl-syn { color: var(--text-main); }
+.find-backdrop.hl-syn mark { color: inherit; }
+.find-backdrop.hl-syn .img-data { color: var(--text-muted); }
+/* colours only — never weight/style/size, so the layout stays identical to the textarea */
+.hl-syn .md-h, .hl-syn .md-h .md-strong { color: var(--accent); text-shadow: .3px 0 0 currentColor; }
+.hl-syn .md-hm, .hl-syn .md-mk, .hl-syn .md-url, .hl-syn .md-pipe, .hl-syn .md-hr, .hl-syn .md-esc, .hl-syn .md-attr, .hl-syn .md-fence, .hl-syn .md-fm, .hl-syn .md-comment { color: var(--text-muted); }
+.hl-syn .md-strong { text-shadow: .35px 0 0 currentColor; }
+.hl-syn .md-em { color: color-mix(in srgb, var(--text-main) 70%, var(--accent)); }
+.hl-syn .md-del { color: var(--text-muted); text-decoration: line-through; }
+.hl-syn .md-hl { background: color-mix(in srgb, #fff176 30%, transparent); }
+.hl-syn .md-code, .hl-syn .md-cb { color: var(--success); }
+.hl-syn .md-cb { background: color-mix(in srgb, var(--text-main) 4%, transparent); }
+.hl-syn .md-math { color: var(--warning); }
+.hl-syn .md-link, .hl-syn .md-fn, .hl-syn .md-ref, .hl-syn .md-lm, .hl-syn .md-qm, .hl-syn .md-box { color: var(--accent); }
+.hl-syn .md-img { color: color-mix(in srgb, var(--accent) 60%, var(--text-muted)); }
+.hl-syn .md-tag { color: color-mix(in srgb, var(--danger) 75%, var(--text-muted)); }
+.hl-syn .md-comment { font-style: normal; }
+[data-theme="white"] .hl-syn .md-hl { background: color-mix(in srgb, #fbc02d 35%, transparent); }
+

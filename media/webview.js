@@ -30,6 +30,11 @@
   const isRelative = (src) => !!src && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(src);
   const resolveRel = (src) => (docBase && isRelative(src) ? docBase + src.replace(/^\.\//, "") : src);
   let editTimer = null;
+  const ED = {      // editor preferences (Document menu)
+    syntax: () => store.get("docxmd:ed.syntax", "1") === "1",
+    lines: () => store.get("docxmd:ed.lineNumbers", "0") === "1",
+    pasteHtml: () => store.get("docxmd:ed.pasteHtml", "1") === "1"
+  };
   const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   const esc = escapeHtml;
@@ -117,7 +122,8 @@
     render: () => renderNow(),
     enabled: () => store.get("docxmd:previewEdit", "1") === "1" && mode() !== "source",
     t: (k) => t(k),
-    toast: (m) => info(m)
+    toast: (m) => info(m),
+    pasteHtml: () => ED.pasteHtml()
   }) : { beforeRender() {}, annotateBlocks() {}, setBlocks() {}, close() {}, hideHandle() {}, busy: () => false };
 
   /* ---------- preview ---------- */
@@ -146,7 +152,7 @@
     if (window.MD2DOCX && MD2DOCX.fixPreviewLinks) MD2DOCX.fixPreviewLinks(preview);
     $$("li", preview).forEach((li) => {
       const i = li.querySelector('input[type="checkbox"]');
-      if (i) { li.classList.add("task-list-item"); i.setAttribute("disabled", ""); }
+      if (i && i.closest("li") === li) { li.classList.add("task-list-item"); i.setAttribute("disabled", ""); }
     });
     $$('a[href]', preview).forEach((a) => {
       if (/^https?:/i.test(a.getAttribute("href") || "")) { a.target = "_blank"; a.rel = "noopener"; }
@@ -185,7 +191,7 @@
     clearTimeout(editTimer);
     editTimer = setTimeout(flushEdit, 200);
   }
-  ta.addEventListener("input", () => { scheduleRender(); schedulePaint(); pushEdit(); });
+  ta.addEventListener("input", () => { scheduleRender(); if (ED.syntax() || ED.lines()) paintEditor(); else schedulePaint(); pushEdit(); });
   ta.addEventListener("blur", () => { if (editTimer) flushEdit(); });
 
   window.addEventListener("message", (ev) => {
@@ -406,6 +412,14 @@
   }
   // Document menu: structure commands, statistics, HTML export, preview editing
   const docCommands = {
+    alignTable() {
+      const r = window.DOCXMDEdit && DOCXMDEdit.alignTable(ta.value, ta.selectionStart);
+      if (!r) { info(t("toast.alignNone")); return; }
+      applyEditAction(r);
+    },
+    edSyntax() { toggleEd("docxmd:ed.syntax", "1", "ed.syntax"); },
+    edLines() { toggleEd("docxmd:ed.lineNumbers", "0", "ed.lineNumbers"); },
+    edPasteHtml() { toggleEd("docxmd:ed.pasteHtml", "1", "ed.pasteHtml"); },
     toc() { insertBlock("[TOC]"); },
     numbering() {
       const v = ta.value, re = window.MD2DOCX && MD2DOCX.NUMBERING_RE;
@@ -454,6 +468,11 @@
       info(t(on ? "toast.previewEditOn" : "toast.previewEditOff"));
     }
   };
+  function toggleEd(key, def, label) {
+    const on = store.get(key, def) !== "1";
+    store.set(key, on ? "1" : "0"); paintEditor();
+    info(t(on ? "ed.on" : "ed.off", { what: t(label) }));
+  }
   function openDocMenu() {
     const peOn = store.get("docxmd:previewEdit", "1") === "1";
     const item = (k, label, extra) => '<button class="pop-item" data-pick="' + k + '">' + esc(label) + (extra || "") + "</button>";
@@ -462,7 +481,12 @@
       item("toc", t("action.toc")) + item("numbering", t("action.numbering"), numOn ? ' <span class="check">✓</span>' : "") +
       item("footnote", t("action.footnote")) + item("caption", t("action.caption")) +
       item("sciclean", t("action.sciclean")) + item("stats", t("action.stats")) + item("html", t("action.exportHtml")) +
-      item("previewEdit", t("action.previewEdit"), peOn ? ' <span class="check">✓</span>' : "");
+      item("previewEdit", t("action.previewEdit"), peOn ? ' <span class="check">✓</span>' : "") +
+      item("alignTable", t("action.alignTable"), ' <span class="kbd">Ctrl+Shift+T</span>') +
+      '<div class="pop-head" style="margin-top:.5rem"><b>' + esc(t("menu.editor")) + "</b></div>" +
+      item("edSyntax", t("ed.syntax"), ED.syntax() ? ' <span class="check">✓</span>' : "") +
+      item("edLines", t("ed.lineNumbers"), ED.lines() ? ' <span class="check">✓</span>' : "") +
+      item("edPasteHtml", t("ed.pasteHtml"), ED.pasteHtml() ? ' <span class="check">✓</span>' : "");
     openPop("docmenu", html, (k) => { closePop(); if (docCommands[k]) docCommands[k](); });
   }
 
@@ -498,12 +522,31 @@
   $("#toolbar").addEventListener("click", (e) => {
     const b = e.target.closest(".tb"); if (b && cmds[b.dataset.cmd]) cmds[b.dataset.cmd]();
   });
-  // Tab indents; Esc, then Tab moves the focus on (keyboard users are not trapped)
-  let tabEscape = false;
+  // Smart Markdown editing (media/mdedit.js, shared with the web app): Enter continues
+  // lists / quotes / table rows, Tab / Shift+Tab — list levels, table cells, indentation,
+  // Alt+↑/↓ move lines, Shift+Alt+↑/↓ duplicate, Ctrl+/ comment, * _ ` = ~ ( [ wrap.
+  // Esc, then Tab moves the focus on (keyboard users are not trapped).
+  let tabEscape = false, plainPaste = false;
+  function applyEditAction(r) {
+    if (!r || r.noop) return;
+    if (r.text != null) editRange(r.start, r.end, r.text);
+    ta.focus();
+    ta.setSelectionRange(r.selStart, r.selEnd);
+    syncActiveLine();
+    const y = caretOffsetY(r.selStart);
+    if (y < ta.scrollTop + 10 || y > ta.scrollTop + ta.clientHeight - 40) ta.scrollTop = Math.max(0, y - ta.clientHeight * 0.35);
+  }
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { tabEscape = true; return; }
-    if (e.key === "Tab" && !tabEscape && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); replaceSel("    "); }
+    if (e.key === "Tab" && tabEscape) { tabEscape = false; return; }
     tabEscape = false;
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "V" || e.key === "v")) { plainPaste = true; return; }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "T" || e.key === "t")) { e.preventDefault(); docCommands.alignTable(); return; }
+    if (!window.DOCXMDEdit || e.isComposing || e.keyCode === 229) return;
+    const r = DOCXMDEdit.onKey(ta.value, ta.selectionStart, ta.selectionEnd, { key: e.key, code: e.code, shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey || e.metaKey });
+    if (!r) return;
+    e.preventDefault(); e.stopPropagation();
+    applyEditAction(r);
   });
 
   /* ---------- images: paste & drag-drop ---------- */
@@ -532,8 +575,15 @@
     const items = (e.clipboardData && e.clipboardData.items) || [];
     const imgs = [];
     for (const it of items) { if (it.kind === "file" && /^image\//.test(it.type)) { const f = it.getAsFile(); if (f) imgs.push(f); } }
-    if (!imgs.length) return;
-    e.preventDefault(); (async () => { for (const f of imgs) await insertImageFile(f); })();
+    if (imgs.length) { e.preventDefault(); (async () => { for (const f of imgs) await insertImageFile(f); })(); return; }
+    if (plainPaste) { plainPaste = false; return; }
+    if (!window.DOCXMDEdit || !e.clipboardData) return;
+    const link = DOCXMDEdit.pasteLink(ta.value, ta.selectionStart, ta.selectionEnd, e.clipboardData.getData("text/plain"));
+    if (link) { e.preventDefault(); applyEditAction(link); return; }
+    if (ED.pasteHtml()) {
+      const md = DOCXMDEdit.htmlToMarkdown(e.clipboardData.getData("text/html"));
+      if (md) { e.preventDefault(); replaceSel(md); }
+    }
   });
   ["dragover", "drop"].forEach((ev) => panes.addEventListener(ev, (e) => e.preventDefault()));
   panes.addEventListener("drop", async (e) => {
@@ -814,12 +864,18 @@
   }
   // Editor backdrop (behind the transparent textarea): tints embedded data-URI
   // images at all times, and marks find matches while the find bar is open.
+  // With the editor options it also draws Markdown syntax colours, line numbers and the
+  // active line (media/mdhighlight.js); the textarea text is then transparent.
   function paintEditor() {
-    if (mode() === "preview") { if (editorBackdrop) editorBackdrop.innerHTML = ""; return; }
     const v = ta.value;
+    const H = window.DOCXMDHighlight;
+    const syn = !!H && ED.syntax() && v.length <= 3000000, lines = !!H && ED.lines();
+    ta.classList.toggle("syn-on", syn && mode() !== "preview");
+    ta.classList.toggle("ln-on", lines && mode() !== "preview");
+    if (mode() === "preview") { if (editorBackdrop) { if (H) H.clear(editorBackdrop); else editorBackdrop.innerHTML = ""; } return; }
     const q = findState.active ? findInput.value : "";
     const hasImg = v.indexOf("data:") !== -1;
-    if (!q && !hasImg) { if (editorBackdrop) editorBackdrop.innerHTML = ""; return; }
+    if (!q && !hasImg && !syn && !lines) { if (editorBackdrop) { if (H) H.clear(editorBackdrop); else editorBackdrop.innerHTML = ""; } return; }
     if (!editorBackdrop) {
       editorBackdrop = document.createElement("div");
       editorBackdrop.className = "find-backdrop";
@@ -831,9 +887,13 @@
     s.width = ta.clientWidth + "px"; s.height = ta.clientHeight + "px";
     const hits = q ? findAll(v, findRegex()).map((h) => [h.s, h.e]) : [];
     const cur = findState.hits.length ? ((findState.idx % findState.hits.length) + findState.hits.length) % findState.hits.length : -1;
-    editorBackdrop.innerHTML = window.MD2DOCX && MD2DOCX.backdropHtml ? MD2DOCX.backdropHtml(v, hits, q ? cur : -1, escapeHtml).html : "";
+    if (H) { H.paint(editorBackdrop, v, { syntax: syn, lineNumbers: lines, hits, cur: q ? cur : -1, esc: escapeHtml }); if (syn || lines) H.setActive(editorBackdrop, ta.selectionStart); }
+    else editorBackdrop.innerHTML = window.MD2DOCX && MD2DOCX.backdropHtml ? MD2DOCX.backdropHtml(v, hits, q ? cur : -1, escapeHtml).html : "";
     editorBackdrop.scrollTop = ta.scrollTop; editorBackdrop.scrollLeft = ta.scrollLeft;
   }
+  function syncActiveLine() { if (editorBackdrop && window.DOCXMDHighlight && (ED.syntax() || ED.lines())) DOCXMDHighlight.setActive(editorBackdrop, ta.selectionStart); }
+  ["selectionchange", "keyup", "click", "focus"].forEach((ev) => ta.addEventListener(ev, syncActiveLine));
+  document.addEventListener("selectionchange", () => { if (document.activeElement === ta) syncActiveLine(); });
   let paintTimer = null;
   function schedulePaint() { clearTimeout(paintTimer); paintTimer = setTimeout(paintEditor, 120); }
   function runFind(jump, keepInputFocus) {
@@ -1000,6 +1060,7 @@
   setMode(st.mode || "split");
   toggleOutline(!!st.outline);
   render();
+  paintEditor();
 
   /* ---------- Word (.docx) → Markdown (same pipeline as the PWA) ---------- */
   function cleanDocxHtml(html) {

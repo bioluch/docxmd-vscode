@@ -2,7 +2,7 @@
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
   "description": "Edit Markdown with a live neumorphic preview, LaTeX math, callout blocks, highlights and colour boxes; clean up scientific notation; export to Word (.docx) with headers, footers and page numbers, and import Word back to Markdown — inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.15",
+  "version": "0.2.1",
   "publisher": "docxmd",
   "engines": {
     "vscode": "^1.80.0"

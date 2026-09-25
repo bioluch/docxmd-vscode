@@ -2,6 +2,10 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.2.1:** the complete **smart editing in Preview mode** (it was missing from the 0.2.0 package on the Marketplace) — in the quick text edit `Enter` adds list items and splits paragraphs, `Tab` / `Shift+Tab` change list levels and move between table cells, `Alt+↑/↓` move items, rows and blocks, `Ctrl+B` / `Ctrl+I` and `* = ~` format the selection, pasted links and formatted text become Markdown; pasting formatted text keeps the spaces around links and bold text; nested task lists keep their parent's number in the preview; a full [Keyboard shortcuts](#keyboard-shortcuts) table. See [What's new in 0.2.1](#whats-new-in-021).
+>
+> **New in 0.2.0:** a smarter editor — **Enter continues lists, quotes and table rows**, **Tab / Shift+Tab** change list levels and move between table cells, **Alt+↑/↓** move lines, **Shift+Alt+↑/↓** duplicate them, **Ctrl+/** comments out, `* _ \` = ~ ( [` wrap the selection; text **pasted from Word or a web page becomes Markdown**, a URL pasted on selected text becomes a link; **Align table** (`Ctrl+Shift+T`); **Markdown syntax highlighting, line numbers and the current line** in the editor — and the same smart editing **in Preview mode** (new list items, list levels, table cells, splitting paragraphs, wrapping, smart paste). See [What's new in 0.2.0](#whats-new-in-020).
+>
 > **Fixed in 0.1.15:** escaped brackets such as `!\[\](images/…)` or `\[\[file\]\]` (typical after a Word import) are no longer taken for LaTeX display math — before, everything up to the next `\]` turned into a red formula error. See [What's new in 0.1.15](#whats-new-in-0115).
 >
 > **Fixed in 0.1.14:** importing Word no longer turns text like `<textarea>` or `&mdash;` into HTML (it could show up as a form field in the preview); inline code and code blocks survive a Markdown → Word → Markdown round trip (Word styles *Verbatim Char* / *Source Code*, as in Pandoc). See [What's new in 0.1.14](#whats-new-in-0114).
@@ -44,6 +48,10 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 ## Features
 
 - Custom editor for `.md` and `.markdown` files — DOCXMD Editor is the default editor for these file types.
+- **Smart editing** — `Enter` continues lists, quotes and table rows, `Tab` / `Shift+Tab` change list levels and move between table cells, `Alt+↑/↓` move lines, selected text is wrapped by `*` `=` `~` … — in the source **and in Preview mode**. See [Keyboard shortcuts](#keyboard-shortcuts).
+- **Smart paste** — text copied from Word, Google Docs or a web page becomes Markdown; a URL pasted onto selected text becomes a link; `Ctrl+Shift+V` pastes plain text.
+- **Markdown syntax highlighting, line numbers and the current line** in the editor (Document menu → Editor).
+- **Align table** (`Ctrl+Shift+T`) — straight columns in the pipe table under the cursor.
 - Live preview with synchronized Markdown source and rendered document.
 - Formatting toolbar for common Markdown editing operations.
 - **Text & image alignment** (left / center / right / justify) — renders in the preview and is honoured on DOCX export.
@@ -71,6 +79,31 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - Synchronized scrolling of the source and the preview in Split mode.
 - External file changes automatically refresh the editor.
 - The built-in VS Code Markdown editor remains available through **Open With…** when needed.
+
+## Keyboard shortcuts
+
+On macOS use `Cmd` instead of `Ctrl`. Editing keys work in the Markdown source, in the ✎ block editor and — where noted — in the quick text edit of Preview mode.
+
+| Keys | Action |
+|---|---|
+| `Ctrl+S` | Save the document (always the latest text) |
+| `Ctrl+F` | Find & replace; `Enter` / `Shift+Enter` — next / previous match, `Ctrl+Enter` in the replace field — Replace all |
+| `Alt+R` / `Alt+C` / `Alt+W` | In the find bar: regular expressions / match case / whole word |
+| `Esc` | Close the find bar, a dialog or a menu |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo (VS Code's own undo stack, one step per edit) |
+| `Ctrl+Shift+H` | Highlight the selection `==…==` |
+| `Ctrl+.` / `Ctrl+,` | Superscript / subscript |
+| `Enter` | Continue a list, task list, quote or table row; on an empty item — one level out / end the list. Preview: new list item, or split the paragraph |
+| `Tab` / `Shift+Tab` | List item one level deeper / higher; next / previous table cell (a new row after the last one); indent / outdent selected lines; otherwise 4 spaces. Also in Preview |
+| `Alt+↑` / `Alt+↓` | Move the current lines. Preview: move a list item, a table row or a whole block |
+| `Shift+Alt+↑` / `Shift+Alt+↓` | Duplicate the current lines |
+| `Ctrl+/` | Comment out / in with `<!-- -->` |
+| `Ctrl+Shift+T` | Align the table under the cursor |
+| `Ctrl+V` / `Ctrl+Shift+V` | Paste (images are saved to `images/`, formatted text becomes Markdown, a URL on selected text becomes a link) / paste plain text |
+| `*` `_` `` ` `` `=` `~` `(` `[` `"` | With text selected: wrap it — `*…*`, `==…==`, `~~…~~`, `` `…` ``; another `*` makes it bold. In Preview also `Ctrl+B` / `Ctrl+I` |
+| `Esc`, then `Tab` | Leave the editor with the keyboard (`Tab` is otherwise captured) |
+| Click · ✎ / double-click / `Alt+click` | Preview: edit text in place · edit the Markdown of a whole block |
+| `Shift+Enter` · `Ctrl+Enter` | Apply the quick edit · apply the block editor (`Esc` cancels) |
 
 ## Usage
 
@@ -164,7 +197,24 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 
 ### Help
 
-Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.2.1
+
+- **Smart editing in Preview mode — complete.** The 0.2.0 package on the Marketplace was built before this part was finished; 0.2.1 contains it. In the quick text edit (click a paragraph, heading, list item or table cell): `Enter` in a list item adds a new item and keeps editing in it (`Enter` on an empty item ends the list), `Enter` in the middle of a paragraph splits it (no stray spaces left at the split); `Tab` / `Shift+Tab` change the list level or move to the next / previous table cell — empty cells and a new row included; `Alt+↑/↓` move a list item, a table row or a whole block (paragraph, heading, table) instead of merging paragraphs; `Ctrl+B` / `Ctrl+I` and `* _ ` = ~ ( [ "` format the selection; `Ctrl+/` comments out; `Ctrl+Shift+T` aligns the table; a URL pasted on selected text becomes a link and formatted text becomes Markdown. Each operation is one undoable edit. In the block editor (✎, double-click, `Alt+click`) all smart keys work as in the source.
+- **Smart paste:** formatted text from Word or a web page keeps the spaces around links and bold / italic text; list and heading markers are normalised (`-   item` → `- item`).
+- **Fix — nested task lists:** an ordinary list item that contains a nested task list (`2. text` followed by `   - [x] …`) lost its number or bullet in the preview. Word export was not affected.
+- **Documentation:** a complete [Keyboard shortcuts](#keyboard-shortcuts) table; smart editing, smart paste, syntax highlighting and Align table in [Features](#features); the online guide (**?** button) has new sections *Smart editing* and *Highlighting & line numbers* and an updated shortcuts table in all four languages. Code examples in this README are no longer turned into GitHub links on the Marketplace page.
+
+## What's new in 0.2.0
+
+Shared with the DOCXMD web app 1.6 (`media/mdedit.js`, `media/mdhighlight.js`):
+
+- **Smart editing:** `Enter` continues bullet, numbered and task lists (`3.` → `4.`, `- [x]` → `- [ ]`), quotes and table rows; `Enter` on an empty item moves it out one level or ends the list. `Tab` / `Shift+Tab` change the level of list items (a numbered item moved in starts at 1), move between table cells (after the last cell a new row is added) and indent / outdent selected lines. `Alt+↑/↓` move the current lines, `Shift+Alt+↑/↓` duplicate them, `Ctrl+/` wraps them in `<!-- -->` (and back). Typing `*`, `_`, `` ` ``, `=`, `~`, `(`, `[` or `"` with text selected wraps it (`=` → `==highlight==`, `~` → `~~strike~~`). `Esc`, then `Tab` still leaves the editor.
+- **Paste:** formatted text from Word, Google Docs or a web page becomes Markdown (headings, lists, tables, bold / italic, links); a URL pasted onto selected text becomes `[text](url)`; `Ctrl+Shift+V` pastes plain text. Can be switched off in the Document menu.
+- **Align table** (`Ctrl+Shift+T` or Document menu): pads the pipe table under the cursor into straight columns, keeping `:--:` alignment.
+- **Smart editing in Preview mode.** In the block editor (✎, double-click, `Alt+click`) everything above works as in the source. In the quick text edit (click a paragraph, heading, list item or table cell): `Enter` in a list item adds a new item and continues editing in it (`Enter` on an empty item ends the list), `Enter` in the middle of a paragraph splits it; `Tab` / `Shift+Tab` change the list level or move to the next / previous table cell — empty cells and a new row included; `Alt+↑/↓` move a list item, a table row or a whole block (paragraph, heading, table); `Ctrl+B` / `Ctrl+I` and `* _ ` = ~ ( [ "` turn the selected text into real formatting; `Ctrl+/` comments out; `Ctrl+Shift+T` aligns the table; a URL pasted on selected text becomes a link and formatted text becomes Markdown. What you typed and the operation land in the source as one undoable edit.
+- **Syntax highlighting** of Markdown in the editor (headings, emphasis, code, formulas, links, lists, tables, callout fences, HTML, footnotes), **line numbers** and the **current line** — switches in the Document menu. Only colours are used, so the text layout never shifts; rendering is incremental, so long documents stay fast.
 
 ## What's new in 0.1.15
 
