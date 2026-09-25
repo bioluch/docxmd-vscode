@@ -504,6 +504,33 @@
     return Object.keys(map).map((w) => "highlight[color='" + w + "'] => mark.hl-" + map[w]);
   }
 
+  // Word styles → Markdown code (Pandoc names; DOCXMD's own export writes them too)
+  function codeStyleMap() {
+    return ["r[style-name='Verbatim Char'] => code", "r[style-name='Source Code Char'] => code",
+      "p[style-name='Source Code'] => pre:separator('\\n')"];
+  }
+  // Turndown rules for text that came from Word:
+  //  • plain text is escaped as text — "<textarea>" or "&mdash;" written in a document stay
+  //    literal characters instead of turning into HTML tags / entities in the preview;
+  //  • <pre> without <code> (a "Source Code" paragraph) becomes a fenced code block.
+  function markdownRules(td) {
+    const baseEscape = td.escape.bind(td);
+    td.escape = (str) => baseEscape(str)
+      .replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;")
+      .replace(/<(?=[A-Za-z\/!?])/g, "&lt;");
+    td.addRule("docxmdPlainPre", {
+      filter: (node) => node.nodeName === "PRE" && !(node.firstChild && node.firstChild.nodeName === "CODE"),
+      replacement: (content, node) => {
+        const c = node.cloneNode(true);
+        c.querySelectorAll("br").forEach((b) => b.replaceWith("\n"));
+        const text = c.textContent.replace(/\n+$/, "");
+        const fence = /```/.test(text) ? "~~~" : "```";
+        return "\n\n" + fence + "\n" + text + "\n" + fence + "\n\n";
+      }
+    });
+    return td;
+  }
+
   // ---- header / footer / document properties → YAML front matter -------------
   const NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
   // Text of a header/footer part: PAGE → {n}, NUMPAGES → {N}, tabs kept as \t.
@@ -590,5 +617,5 @@
     return "---\n" + keys.map((k) => k + ": " + q(String(meta[k]))).join("\n") + "\n---\n\n";
   }
 
-  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry, extractMeta, frontMatterText, highlightStyleMap };
+  global.DOCXFMT = { extract, apply, structure, tableRule, readZipEntry, extractMeta, frontMatterText, highlightStyleMap, codeStyleMap, markdownRules };
 })(typeof window !== "undefined" ? window : this);

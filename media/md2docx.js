@@ -259,7 +259,7 @@
           runs.push(...inlineRuns(tk.tokens, Object.assign({}, style, { highlight: HIGHLIGHTS[tk.color] || "yellow" }), imgMap, D)); break;
         case "codespan":
           runs.push(new D.TextRun({
-            text: decode(tk.text), font: "Consolas", size: 20,
+            text: decode(tk.text), style: "VerbatimChar", font: "Consolas", size: 20,
             color: style.color, shading: { type: D.ShadingType.CLEAR, fill: "EFEFEF" }
           }));
           break;
@@ -426,6 +426,7 @@
     });
     return new D.Paragraph({
       children,
+      style: "SourceCode",       // Pandoc's name: a .docx import turns it back into a code block
       shading: { type: D.ShadingType.CLEAR, fill: "F5F5F5" },
       spacing: { before: 80, after: 120 },
       indent: indentLeft ? { left: indentLeft } : undefined,
@@ -601,7 +602,7 @@
           runs.push(new D.ExternalHyperlink({ link: n.getAttribute("href") || "#", children: kids }));
           continue;
         }
-        if (tag === "code") { runs.push(new D.TextRun({ text: n.textContent, font: "Consolas", size: 20, color: st.color })); continue; }
+        if (tag === "code") { runs.push(new D.TextRun({ text: n.textContent, style: "VerbatimChar", font: "Consolas", size: 20, color: st.color })); continue; }
         if (tag === "ul" || tag === "ol") { flush(); walk(n, st, { ordered: tag === "ol", n: 0 }); continue; }
         if (tag === "li") {
           flush();
@@ -1685,7 +1686,12 @@
         paragraphStyles: [
           { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 40, bold: true, color: "1a1a1a" }, paragraph: { spacing: { before: 240, after: 120 } } },
           { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 32, bold: true, color: "1a1a1a" }, paragraph: { spacing: { before: 200, after: 100 } } },
-          { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 28, bold: true, color: "2a2a2a" }, paragraph: { spacing: { before: 160, after: 80 } } }
+          { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 28, bold: true, color: "2a2a2a" }, paragraph: { spacing: { before: 160, after: 80 } } },
+          // code blocks / inline code carry Pandoc's style names, so Word → Markdown restores them
+          { id: "SourceCode", name: "Source Code", basedOn: "Normal", run: { font: "Consolas", size: 20 } }
+        ],
+        characterStyles: [
+          { id: "VerbatimChar", name: "Verbatim Char", basedOn: "DefaultParagraphFont", run: { font: "Consolas", size: 20 } }
         ]
       },
       sections: [section]

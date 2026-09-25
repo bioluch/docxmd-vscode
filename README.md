@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **Fixed in 0.1.14:** importing Word no longer turns text like `<textarea>` or `&mdash;` into HTML (it could show up as a form field in the preview); inline code and code blocks survive a Markdown → Word → Markdown round trip (Word styles *Verbatim Char* / *Source Code*, as in Pandoc). See [What's new in 0.1.14](#whats-new-in-0114).
+>
 > **New in 0.1.13:** the editor catches up with the DOCXMD web app 1.5 — **interface in 4 languages** (follows VS Code's display language), **Outline** panel, **find & replace with regular expressions** (`$1`), match case and whole word, **synchronized scrolling**, **editing in the preview** (click text, ✎ / double-click a block), a **Document** menu (table of contents, numbered headings, footnote, caption, statistics, **HTML export**), six highlight colours; reliable sync with the VS Code document (no lost keystrokes, precise undo, `Ctrl+S` always saves the latest text). See [What's new in 0.1.13](#whats-new-in-0113).
 >
 > **New in 0.1.12:** pasted / dropped **images are saved to `images/image-001.png` next to the `.md`** (relative link instead of base64) and relative images now show in the preview and export to Word; **Clean up scientific notation** (`T _ { Core }`, `$R^2$`, `CO2`, `36.7°C` → T<sub>Core</sub>, R², CO₂, 36.7 °C) with a review list; **highlights** `==text==` / `==red:text==` (`Ctrl+Shift+H`); **YAML front matter → Word header, footer, page numbers and document properties**. See [What's new in 0.1.12](#whats-new-in-0112).
@@ -161,6 +163,12 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.14
+
+- **Word import keeps text as text:** `<tag>`-like text and `&entities;` typed in a Word document are escaped in the Markdown, so the preview no longer renders them as HTML (e.g. `<textarea>` appeared as an input box).
+- **Code survives the round trip:** DOCX export marks inline code with the character style *Verbatim Char* and code blocks with the paragraph style *Source Code* (Pandoc's names); import turns them back into `` `code` `` and fenced blocks. Documents from Pandoc import the same way.
+- Documents exported by 0.1.13 and earlier have no code styles — their code comes back as plain (now correctly escaped) text.
 
 ## What's new in 0.1.13
 

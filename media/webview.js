@@ -1012,10 +1012,12 @@
       const ab = u8.buffer;
       const result = await mammoth.convertToHtml({ arrayBuffer: ab },
         { styleMap: ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
-          .concat(window.DOCXFMT && DOCXFMT.highlightStyleMap ? DOCXFMT.highlightStyleMap() : []) });
+          .concat(window.DOCXFMT && DOCXFMT.highlightStyleMap ? DOCXFMT.highlightStyleMap() : [])
+          .concat(window.DOCXFMT && DOCXFMT.codeStyleMap ? DOCXFMT.codeStyleMap() : []) });
       const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*", strongDelimiter: "**", hr: "---" });
       if (window.turndownPluginGfm) td.use(window.turndownPluginGfm.gfm);
       td.keep(["sub", "sup"]);
+      if (window.DOCXFMT && DOCXFMT.markdownRules) DOCXFMT.markdownRules(td);   // "<tag>" / "&x;" typed in Word stay text
       let html = result.value || "";
       if (window.DOCXFMT) { DOCXFMT.tableRule(td); html = DOCXFMT.apply(html, await DOCXFMT.extract(ab)); }
       let md = td.turndown(cleanDocxHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
