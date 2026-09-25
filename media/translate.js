@@ -10,7 +10,10 @@
   "use strict";
 
   const LANGS = ["en", "uk", "es", "zh"];
-  const DEEPL = { en: "EN", uk: "UK", es: "ES", zh: "ZH" };
+  // DeepL target codes: "EN" / "ZH" are deprecated aliases — use the explicit variants.
+  // Source codes stay plain (DeepL rejects variants as source_lang).
+  const DEEPL = { en: "EN-GB", uk: "UK", es: "ES", zh: "ZH-HANS" };
+  const DEEPL_SRC = { en: "EN", uk: "UK", es: "ES", zh: "ZH" };
 
   // ---- inline protection -------------------------------------------------
   const OPEN = "", CLOSE = "";
@@ -23,6 +26,9 @@
     s = s.replace(/\]\(([^)]+)\)/g, (m, url) => "]" + push("(" + url + ")")); // link URLs (keep text)
     s = s.replace(/<[^>\s][^>]*>/g, push);                 // html tags
     s = s.replace(/(?:https?|mailto):\/?\/?\S+/g, push);   // bare URLs
+    s = s.replace(/\$\$[^$\n]+\$\$/g, push);               // $$…$$ on one line
+    s = s.replace(/\\\([\s\S]*?\\\)/g, push);              // \(…\) inline math
+    s = s.replace(/\\\[[\s\S]*?\\\]/g, push);              // \[…\] on one line
     s = s.replace(/\$[^$\n]+\$/g, push);                   // inline math
     s = s.replace(/\[\^[^\]\s]+\]:?/g, push);              // footnote refs / definitions
     s = s.replace(/\{#[a-z]+:[^}\n]*\}/g, push);            // {#fig:id} {#tbl:id} {#sec:id}
@@ -63,7 +69,7 @@
     const lines = md.split("\n");
     const out = new Array(lines.length);
     const jobs = [];
-    let fence = null;
+    let fence = null, math = null, indCode = false, prevBlank = true, listCtx = false;
     const fm = global.MD2DOCX && global.MD2DOCX.parseFrontMatter ? global.MD2DOCX.parseFrontMatter(md) : null;
     const fmLines = fm ? fm.raw.replace(/\r?\n$/, "").split("\n").length : 0;
     for (let i = 0; i < lines.length; i++) {
@@ -83,9 +89,23 @@
         if (new RegExp("^\\s*" + fence + "+\\s*$").test(line)) fence = null;
         continue;
       }
+      // display math $$ … $$ / \[ … \] spanning lines: never sent to the MT engine
+      if (math) {
+        out[i] = line;
+        if (math === "$$" ? /\$\$\s*$/.test(line) : /\\\]\s*$/.test(line)) math = null;
+        continue;
+      }
       const fm = line.match(/^\s*(```+|~~~+)/);
-      if (fm) { fence = fm[1][0]; out[i] = line; continue; }
-      if (!line.trim()) { out[i] = line; continue; }
+      if (fm) { fence = fm[1][0]; out[i] = line; prevBlank = false; continue; }
+      if (/^\s*\$\$/.test(line)) { out[i] = line; if (!/^\s*\$\$[\s\S]*\$\$\s*$/.test(line.trim().length > 2 ? line : "")) math = "$$"; prevBlank = false; continue; }
+      if (/^\s*\\\[/.test(line)) { out[i] = line; if (!/\\\]\s*$/.test(line)) math = "\\["; prevBlank = false; continue; }
+      if (!line.trim()) { out[i] = line; prevBlank = true; continue; }
+      // indented code block (4 spaces / tab after a blank line, not a list continuation)
+      const indented = /^(?: {4}|\t)/.test(line);
+      if (indented && (indCode || (prevBlank && !listCtx))) { indCode = true; out[i] = line; prevBlank = false; continue; }
+      indCode = false;
+      listCtx = /^\s*(?:[-*+]|\d+[.)])\s/.test(line) || (indented && listCtx);
+      prevBlank = false;
       // colour-box fences  :::red … :::  stay verbatim
       if (/^\s*:::/.test(line)) { out[i] = line; continue; }
       // table separator row  | --- | :--: |
@@ -124,7 +144,7 @@
       // The PWA never defines __deeplTransport, so it keeps using its proxy.
       // Keep this hook: the extension ships a verbatim copy of this file.
       if (global.__deeplTransport) {
-        const arr2 = await global.__deeplTransport(chunk, DEEPL[target], source ? DEEPL[source] : undefined);
+        const arr2 = await global.__deeplTransport(chunk, DEEPL[target], source ? DEEPL_SRC[source] : undefined);
         arr2.forEach((t) => res.push(typeof t === "string" ? t : t.text));
         if (onProgress) onProgress((i + chunk.length) / texts.length);
         continue;
@@ -132,7 +152,7 @@
       const r = await fetch("api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: key, text: chunk, target: DEEPL[target], source: source ? DEEPL[source] : undefined })
+        body: JSON.stringify({ key: key, text: chunk, target: DEEPL[target], source: source ? DEEPL_SRC[source] : undefined })
       });
       if (!r.ok) {
         let msg = r.status + "";

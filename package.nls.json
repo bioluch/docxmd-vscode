@@ -1,0 +1,10 @@
+{
+  "ext.displayName": "DOCXMD — Markdown editor & DOCX converter",
+  "editor.displayName": "DOCXMD Editor",
+  "cmd.openWith": "Open in DOCXMD Editor",
+  "cmd.exportDocx": "Export to Word (.docx)",
+  "cmd.exportHtml": "Export to HTML",
+  "cmd.importDocx": "Import Word (.docx) to Markdown",
+  "cmd.setDeeplKey": "Set DeepL API key",
+  "cmd.cleanNotation": "Clean up scientific notation"
+}

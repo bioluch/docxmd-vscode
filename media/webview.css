@@ -200,3 +200,62 @@ body {
 .markdown-body details.fm-card table { margin: 0 .8em .7em; border: none; }
 .markdown-body details.fm-card th, .markdown-body details.fm-card td { border: none; padding: .15em .8em .15em 0; background: transparent !important; text-align: left; }
 .markdown-body details.fm-card th { color: var(--text-muted); font-family: monospace; }
+
+/* ===== 0.1.13: parity with the DOCXMD web app ===== */
+.panes { position: relative; }
+.findbar .ftogs { display: inline-flex; gap: .2rem; flex: 0 0 auto; }
+.findbar .ftog { min-width: 28px; height: 28px; padding: 0 .3rem; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border-subtle); background: var(--bg-base); color: var(--text-muted); font: 700 .75rem ui-monospace, Consolas, monospace; }
+.findbar .ftog:hover { color: var(--text-main); }
+.findbar .ftog.on { color: var(--accent-contrast); background: var(--accent); border-color: var(--accent); }
+.findbar .count.bad { color: var(--danger); }
+/* editing in the preview (js/previewedit.js) */
+.markdown-body i.bm { display: none; }
+.pe-handle { position: absolute; z-index: 6; width: 24px; height: 24px; border-radius: 6px; padding: 0;
+  border: 1px solid var(--border-subtle); background: var(--bg-card); color: var(--text-muted);
+  font-size: .8rem; line-height: 22px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.pe-handle.show { opacity: .75; pointer-events: auto; }
+.pe-handle:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.mode-source .pe-handle { display: none; }
+.markdown-body .be-hidden { display: none !important; }
+.markdown-body .block-editor { margin: .6em 0 1em; border: 1px solid var(--accent); border-radius: 10px; background: var(--bg-base);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.markdown-body .block-editor textarea { display: block; width: 100%; min-height: 3.2em; resize: vertical; border: none; outline: none;
+  background: transparent; color: var(--text-main); padding: .7em .9em; border-radius: 10px 10px 0 0;
+  font: 14px/1.6 ui-monospace, "Cascadia Code", Consolas, monospace; }
+.markdown-body .block-editor .be-bar { display: flex; align-items: center; gap: .5rem; padding: .4rem .6rem; border-top: 1px solid var(--border-subtle); }
+.markdown-body .block-editor .be-hint { flex: 1 1 auto; font-size: .75rem; color: var(--text-muted); }
+.markdown-body .block-editor .btn { padding: .3rem .8rem; font-size: .8rem; }
+.btn.ghost { background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border-subtle); }
+.markdown-body .qe-on { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 3px; border-radius: 3px; caret-color: var(--accent); }
+.markdown-body [data-b] { cursor: text; }
+.markdown-body pre[data-b], .markdown-body hr[data-b], .markdown-body .katex-ph[data-b] { cursor: default; }
+.markdown-body .flash { animation: docxmd-flash 1.4s ease-out; }
+@keyframes docxmd-flash { 0% { background: color-mix(in srgb, var(--accent) 30%, transparent); } 100% { background: transparent; } }
+/* edits made while the editor pane is hidden (Preview mode) still use the textarea's undo stack */
+.panes.edit-shadow .pane-editor { display: flex !important; position: fixed !important; left: 0; top: 0;
+  width: 4px !important; height: 4px !important; opacity: 0; pointer-events: none; overflow: hidden; z-index: -1; }
+/* outline panel */
+.outline { flex: 0 0 230px; max-width: 40%; overflow: auto; background: var(--bg-card); border-right: 1px solid var(--border-subtle); padding: .6rem .4rem; font-size: .82rem; }
+.outline.hidden { display: none; }
+.outline h4 { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin: 0 .4rem .4rem; }
+.outline a { display: block; color: var(--text-main); text-decoration: none; padding: .18rem .4rem; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.outline a:hover { color: var(--accent); background: var(--bg-base); }
+.outline a.active { color: var(--accent); font-weight: 700; }
+.outline .l2 { padding-left: 1rem; } .outline .l3 { padding-left: 1.8rem; } .outline .l4, .outline .l5, .outline .l6 { padding-left: 2.6rem; font-size: .78rem; }
+.outline .empty { color: var(--text-muted); padding: .2rem .4rem; }
+/* modal (statistics) */
+.modal-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 80; display: none; align-items: center; justify-content: center; padding: 1rem; }
+.modal-scrim.show { display: flex; }
+.modal { width: 460px; max-width: 100%; max-height: 88vh; overflow: auto; padding: 1.3rem 1.5rem; border-radius: 14px; background: var(--bg-card); color: var(--text-main); box-shadow: 0 12px 40px rgba(0,0,0,.4); }
+.modal h3 { margin-bottom: .8rem; }
+.modal .actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1rem; }
+.stats-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.stats-table th { text-align: left; font-weight: 400; color: var(--text-muted); padding: .2rem .6rem .2rem 0; }
+.stats-table td { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.stats-table td small { font-weight: 400; color: var(--text-muted); margin-left: .3rem; }
+.stats-table tr.grp td { text-align: left; font-weight: 700; color: var(--accent); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; padding: .7rem 0 .2rem; }
+#stWords { cursor: pointer; text-decoration: underline dotted; }
+.popover .hl-none { padding: 0 .12em; text-decoration: line-through; color: var(--text-muted); }
+.popover .kbd { font-size: .7rem; color: var(--text-muted); }
+.popover .pop-item .check { margin-left: auto; color: var(--accent); }

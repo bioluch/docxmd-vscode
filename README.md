@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.1.13:** the editor catches up with the DOCXMD web app 1.5 — **interface in 4 languages** (follows VS Code's display language), **Outline** panel, **find & replace with regular expressions** (`$1`), match case and whole word, **synchronized scrolling**, **editing in the preview** (click text, ✎ / double-click a block), a **Document** menu (table of contents, numbered headings, footnote, caption, statistics, **HTML export**), six highlight colours; reliable sync with the VS Code document (no lost keystrokes, precise undo, `Ctrl+S` always saves the latest text). See [What's new in 0.1.13](#whats-new-in-0113).
+>
 > **New in 0.1.12:** pasted / dropped **images are saved to `images/image-001.png` next to the `.md`** (relative link instead of base64) and relative images now show in the preview and export to Word; **Clean up scientific notation** (`T _ { Core }`, `$R^2$`, `CO2`, `36.7°C` → T<sub>Core</sub>, R², CO₂, 36.7 °C) with a review list; **highlights** `==text==` / `==red:text==` (`Ctrl+Shift+H`); **YAML front matter → Word header, footer, page numbers and document properties**. See [What's new in 0.1.12](#whats-new-in-0112).
 >
 > **New in 0.1.11:** **resize images with the mouse** — hover an image in the preview and drag the handle at its corner; the width is written into the Markdown (`{width=60%}`) and carried into the exported `.docx`. Importing a `.docx` now keeps each picture's size from Word.
@@ -45,7 +47,11 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - **Clean up scientific notation** — MinerU/LaTeX leftovers, chemical formulas and units, reviewed in a list before anything changes.
 - **Highlights** `==text==`, `==red:text==` — Word text highlighting in DOCX.
 - **Front matter** — `header`, `footer`, `page-numbers`, `title`, `author` become a real Word header / footer, PAGE / NUMPAGES fields and document properties.
-- **Find & replace** (`Ctrl+F`) with every match highlighted in both the source and the preview.
+- **Find & replace** (`Ctrl+F`) with every match highlighted in both the source and the preview; regular expressions with `$1` groups, match case, whole word, **Replace** / **Replace all** (one `Ctrl+Z` undoes it).
+- **Outline** panel (button at the left of the toolbar): all headings with their numbers, follows the scroll, click to jump.
+- **Editing in the preview** (as in Typora): click a paragraph, heading, list item or table cell to edit its text in place; ✎, double-click or `Alt+click` edits the Markdown of a whole block.
+- **Document menu**: table of contents `[TOC]`, numbered headings, footnote, figure / table caption, clean up notation, **statistics** (also a click on the word counter), **export to HTML** (formulas as MathML — no external files needed).
+- **Interface in English, Українська, Español, 中文** — follows VS Code's display language.
 - **Status bar** with live word / character / line / reading-time counts, a scroll-position indicator and quick navigation (start / end / click-to-jump).
 - **LaTeX math** — inline `\(…\)` or `$…$` and display `\[…\]` / `$$…$$` formulas rendered with KaTeX (offline), and exported to Word as **native editable equations** (OMML).
 - **Colour boxes** — wrap text or a quote in `:::red … :::` (or `:::green`, `:::#ff8800`, Ukrainian names like `:::червоний`) to give it a coloured bar in the preview and in Word.
@@ -57,7 +63,8 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - Split / Source / Preview modes.
 - Export to Word (`.docx`) — use the `DOCXMD: Export to Word (.docx)` command or the DOCX button.
 - Import Word (`.docx`) — use the `DOCXMD: Import Word (.docx) to Markdown` command or the Explorer context menu on a `.docx` file.
-- Two-way synchronization with the VS Code document.
+- Two-way synchronization with the VS Code document — minimal edits, precise undo, no lost keystrokes.
+- Synchronized scrolling of the source and the preview in Split mode.
 - External file changes automatically refresh the editor.
 - The built-in VS Code Markdown editor remains available through **Open With…** when needed.
 
@@ -112,7 +119,7 @@ Names: `red`, `orange`, `yellow`, `green`, `teal`, `blue`, `purple`, `pink`, `gr
 
 ### Find & replace
 
-Press `Ctrl+F` (or the 🔍 button) to open the find bar. Type a query and press `Enter`; every match is highlighted — the current one in the accent colour, the rest in yellow — in the source and the preview. `Enter` / `Shift+Enter` move to the next / previous match. Use the second field and **Replace all** to replace.
+Press `Ctrl+F` (or the 🔍 button) to open the find bar. Type a query and press `Enter`; every match is highlighted — the current one in the accent colour, the rest in yellow — in the source and the preview. `Enter` / `Shift+Enter` move to the next / previous match. Toggle **.\*** (regular expression, `Alt+R`), **Aa** (match case, `Alt+C`) and **W** (whole word, `Alt+W`). In the replace field `Enter` replaces the current match, `Ctrl+Enter` replaces all; with regular expressions `$1`, `$<name>` and `$&` insert groups — e.g. find `T(Core|Periphery)`, replace `T<sub>$1</sub>`. Every replacement is undoable.
 
 ### Alignment & images
 
@@ -154,6 +161,19 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.13
+
+- **Localized interface** — toolbar tooltips, menus, find bar, status bar, outline and statistics in English, Українська, Español and 中文 (VS Code's display language); command titles localized too (`package.nls.*.json`).
+- **Outline** panel with scroll-spy; **synchronized scrolling** in Split mode.
+- **Find & replace Pro** — regular expressions with `$1`, match case, whole word, Replace one; replacing is now undoable (it used to reset the undo history).
+- **Editing in the preview** — the same module as the web app (`media/previewedit.js`): quick text edit and a block editor; every change is one undoable edit.
+- **Document menu** — `[TOC]`, numbered headings, footnote, caption, clean up notation, statistics, **Export to HTML** (also the command **DOCXMD: Export to HTML**), editing-in-preview switch; highlight button with six colours.
+- **Reliable document sync** — edits are sent as minimal range replacements and our own edits are never echoed back, so fast typing is not overwritten; `Ctrl+S` saves the text you see.
+- **Import Word into an open document** now converts in place (it used to empty the file and lose the import); the imported front matter no longer repeats the file name as the title.
+- **Word export** keeps WebP, AVIF and SVG images (converted to PNG) and HTML entities like `&mdash;`; the preview is no longer re-rendered on every keystroke.
+- **Translation** leaves display formulas and indented code untouched; DeepL requests time out after 60 s; English = `EN-GB`, Chinese = `ZH-HANS`.
+- **Accessibility** — every toolbar button has a label; `Esc`, then `Tab` leaves the editor.
 
 ## What's new in 0.1.12
 

@@ -14,17 +14,45 @@
   // ---- Image pre-fetch ---------------------------------------------------
   async function blobToInfo(blob, src) {
     try {
-      const buf = await blob.arrayBuffer();
       let type = (blob.type || "").split("/")[1] || "";
       type = type.replace("jpeg", "jpg").replace("svg+xml", "svg");
-      if (!/^(png|jpg|gif|bmp|svg)$/.test(type)) {
+      if (!/^(png|jpg|gif|bmp|svg|webp|avif)$/.test(type)) {
         const ext = ((src || "").split("?")[0].split(".").pop() || "").toLowerCase();
         type = ext === "jpeg" ? "jpg" : ext;
       }
-      if (!/^(png|jpg|gif|bmp)$/.test(type)) return null; // docx raster only
+      // Word takes PNG / JPEG / GIF / BMP only: anything else the browser can
+      // draw (WebP, AVIF, SVG…) is rasterised to PNG instead of being dropped.
+      if (!/^(png|jpg|gif|bmp)$/.test(type)) {
+        const png = await rasterToPng(blob, type === "svg" ? "image/svg+xml" : "");
+        if (!png) return null;
+        blob = png; type = "png";
+      }
+      const buf = await blob.arrayBuffer();
       const dim = await imageSize(blob);
       return { data: buf, type: type, width: dim.w, height: dim.h };
     } catch (e) { return null; }
+  }
+  // Any browser-decodable image → PNG blob (2× for SVG so vector art stays sharp)
+  function rasterToPng(blob, forceType) {
+    if (typeof document === "undefined") return Promise.resolve(null);
+    if (forceType && blob.type !== forceType) blob = new Blob([blob], { type: forceType });
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = forceType === "image/svg+xml" ? 2 : 1;
+          const w = Math.max(1, Math.round((img.naturalWidth || MAX_IMG_W) * scale));
+          const h = Math.max(1, Math.round((img.naturalHeight || Math.round(MAX_IMG_W * 0.66)) * scale));
+          const c = document.createElement("canvas"); c.width = w; c.height = h;
+          c.getContext("2d").drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          c.toBlob((b) => resolve(b), "image/png");
+        } catch (e) { URL.revokeObjectURL(url); resolve(null); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
   }
   async function fetchImage(src) {
     try {
@@ -83,9 +111,19 @@
   // ![alt](src "title"){attrs}   and   <img … src="…" …>
   const MD_IMG_RE = /!\[(?:[^\]\\\n]|\\.)*\]\(\s*(<[^>\n]*>|[^\s)]+)(?:\s+"[^"\n]*")?\s*\)(\{[^}\n]*\})?/g;
   const HTML_IMG_RE = /<img\b[^>]*>/gi;
+  // Source ranges that never render as images: fenced code, `code spans`, <!-- comments -->
+  function codeRanges(text) {
+    const out = [];
+    const re = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]{0,3}\2[`~]*[ \t]*(?=\n|$)|$)|<!--[\s\S]*?(?:-->|$)|(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?[^`\n]\3(?!`)/g;
+    let m;
+    while ((m = re.exec(text))) { out.push([m.index, m.index + m[0].length]); if (!m[0].length) re.lastIndex++; }
+    return out;
+  }
   function imageRanges(text) {
     const out = [];
     if (!text) return out;
+    const skip = codeRanges(text);
+    const inCode = (i) => skip.some((r) => i >= r[0] && i < r[1]);
     let m;
     MD_IMG_RE.lastIndex = 0;
     while ((m = MD_IMG_RE.exec(text))) {
@@ -97,7 +135,7 @@
       const s = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(m[0]);
       out.push({ kind: "html", start: m.index, end: m.index + m[0].length, src: s ? (s[1] != null ? s[1] : s[2]).replace(/&amp;/g, "&") : "", tag: m[0] });
     }
-    return out.sort((a, b) => a.start - b.start);
+    return out.filter((r) => !inCode(r.start)).sort((a, b) => a.start - b.start);
   }
   // Minimal edit {start, end, text} that sets (or with width=null removes) the width
   // of an image found by imageRanges(). Only the attribute part changes, never the
@@ -316,11 +354,23 @@
     });
   }
 
+  // HTML entities → characters, the way the preview shows them: &mdash; &copy;
+  // &#8212; &#x2014; … (each entity decoded once, so "&amp;lt;" stays "&lt;").
+  const ENT = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  let entEl = null;
   function decode(s) {
     if (s == null) return "";
-    return String(s)
-      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
+    return String(s).replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]{1,31});/gi, (m, e) => {
+      if (e[0] === "#") {
+        const cp = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+        return cp > 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : m;
+      }
+      if (ENT[e] != null) return ENT[e];
+      if (typeof document === "undefined") return m;
+      entEl = entEl || document.createElement("textarea");
+      entEl.innerHTML = m;
+      return entEl.value;
+    });
   }
 
   const HEADING = (D) => [null, D.HeadingLevel.HEADING_1, D.HeadingLevel.HEADING_2,
@@ -1429,10 +1479,10 @@
     const fm = parseFrontMatter(markdown || "");
     const meta = fm ? fm.meta : {};
     const tokens = global.marked.lexer(fm ? fm.body : (markdown || ""));
-    DOC = analyzeDoc(tokens); // numbers figures/tables/footnotes/headings (same as the preview)
-    DOC.meta = fm ? meta : null;
 
-    // Pre-fetch images
+    // Pre-fetch images FIRST. Everything after the awaits below runs synchronously
+    // up to Packer, so a preview render in between (it resets the shared DOC) can
+    // no longer mix its numbering into the export.
     const srcs = new Set();
     collectImageSrcs(tokens, srcs);
     const imgMap = new Map();
@@ -1449,6 +1499,10 @@
         done++; report(0.05 + 0.2 * (done / srcs.size), "images");
       }
     }
+
+    const previewDoc = DOC;
+    DOC = analyzeDoc(tokens); // numbers figures/tables/footnotes/headings (same as the preview)
+    DOC.meta = fm ? meta : null;
 
     // default quote bar = the editor theme's accent (what the preview shows)
     const ctx = { D, imgMap, ol: 0, olStarts: new Set(), quoteColor: boxColor(opts.quoteColor) || "BBBBBB" };
@@ -1637,6 +1691,7 @@
       sections: [section]
     });
 
+    DOC = previewDoc;      // hand the preview's state back before the async packing
     const blob = await D.Packer.toBlob(doc);
     report(1, "done");
     return blob;

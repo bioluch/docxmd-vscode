@@ -122,7 +122,8 @@ function askForAnotherKey(status) {
 function deeplRequest(texts, target, source, key) {
   return new Promise((resolve, reject) => {
     const host = /:fx$/.test(key) ? "api-free.deepl.com" : "api.deepl.com";
-    const body = { text: texts, target_lang: target };
+    // same payload as the web app's proxy (server/translate-proxy.js) → same result
+    const body = { text: texts, target_lang: target, preserve_formatting: true };
     if (source) body.source_lang = source;
     const payload = JSON.stringify(body);
     const req = https.request({
@@ -139,12 +140,15 @@ function deeplRequest(texts, target, source, key) {
         }
       });
     });
+    req.setTimeout(60000, () => req.destroy(Object.assign(new Error("DeepL did not answer in time"), { status: 504 })));
     req.on("error", reject); req.write(payload); req.end();
   });
 }
 let activePanel = null; // the most recently focused DOCXMD editor panel (for the export command)
-// .docx files waiting to be converted by the webview of their target .md (uri → base64)
+// .docx files waiting to be converted by the webview of their target .md (uri → {data, name})
 const pendingImports = new Map();
+// open DOCXMD editors by document URI (an import into an open .md goes straight to it)
+const openPanels = new Map();
 
 // Word → Markdown: pick a .docx, choose the .md to create, then let the DOCXMD
 // webview convert it (mammoth + table formatting + turndown, as in the PWA).
@@ -162,8 +166,17 @@ async function importDocx(uri) {
       filters: { "Markdown": ["md"] }, saveLabel: "Create Markdown"
     });
     if (!target) return;
-    await vscode.workspace.fs.writeFile(target, new Uint8Array(0));
-    pendingImports.set(target.toString(), Buffer.from(bytes).toString("base64"));
+    const job = { data: Buffer.from(bytes).toString("base64"), name: path.basename(src.path).replace(/\.docx$/i, "") };
+    const open = openPanels.get(target.toString());
+    if (open) {                          // already open in DOCXMD: convert in place (undoable)
+      open.reveal();
+      open.webview.postMessage({ type: "importDocx", dataBase64: job.data, name: job.name });
+      return;
+    }
+    let exists = false;
+    try { await vscode.workspace.fs.stat(target); exists = true; } catch (e) {}
+    if (!exists) await vscode.workspace.fs.writeFile(target, new Uint8Array(0));
+    pendingImports.set(target.toString(), job);
     await vscode.commands.executeCommand("vscode.openWith", target, VIEW_TYPE);
   } catch (e) {
     vscode.window.showErrorMessage("DOCXMD import failed: " + e.message);
@@ -201,6 +214,14 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.importDocx", (uri) => importDocx(uri)));
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.cleanNotation", () => cleanNotation()));
 
+  // Ask the active DOCXMD editor to export to .html
+  context.subscriptions.push(
+    vscode.commands.registerCommand("docxmd.exportHtml", () => {
+      if (activePanel) activePanel.webview.postMessage({ type: "requestExportHtml" });
+      else vscode.window.showInformationMessage('Open a Markdown file with "DOCXMD: Open in DOCXMD Editor" first.');
+    })
+  );
+
   // Ask the active DOCXMD editor to export to .docx
   context.subscriptions.push(
     vscode.commands.registerCommand("docxmd.exportDocx", () => {
@@ -227,17 +248,35 @@ class DocxmdEditorProvider {
 
     activePanel = webviewPanel;
     activeDocument = document;
-    let fromWebview = false;
+    const key = document.uri.toString();
+    openPanels.set(key, webviewPanel);
+    const docName = path.basename(document.uri.path).replace(/\.(md|markdown)$/i, "") || "document";
 
-    const postUpdate = () => webview.postMessage({ type: "update", text: document.getText(), base: docBase });
+    const postUpdate = () => webview.postMessage({ type: "update", text: document.getText(), base: docBase, name: docName });
 
+    // Webview → document. Edits are serialized and turned into the smallest range
+    // replacement (good undo steps, no full-document rewrite). The text the webview
+    // sent last is remembered: a change event that produces exactly that text is our
+    // own and is not echoed back — so a slow round-trip can never overwrite newer typing.
+    // Every text still on its way is remembered (fast typing queues several).
+    const inFlight = [];
+    let queue = Promise.resolve();
     const applyEdit = (text) => {
-      if (text === document.getText()) return;
-      const edit = new vscode.WorkspaceEdit();
-      const full = new vscode.Range(0, 0, document.lineCount, 0);
-      edit.replace(document.uri, full, text);
-      fromWebview = true;
-      return vscode.workspace.applyEdit(edit).then(() => { fromWebview = false; });
+      text = String(text);
+      inFlight.push(text);
+      if (inFlight.length > 50) inFlight.splice(0, inFlight.length - 50);
+      queue = queue.then(async () => {
+        const cur = document.getText();
+        if (text === cur) return;
+        let a = 0; const max = Math.min(cur.length, text.length);
+        while (a < max && cur.charCodeAt(a) === text.charCodeAt(a)) a++;
+        let b = 0;
+        while (b < max - a && cur.charCodeAt(cur.length - 1 - b) === text.charCodeAt(text.length - 1 - b)) b++;
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, new vscode.Range(document.positionAt(a), document.positionAt(cur.length - b)), text.slice(a, text.length - b));
+        await vscode.workspace.applyEdit(edit);
+      }).catch((e) => vscode.window.showErrorMessage("DOCXMD: could not apply the edit — " + e.message));
+      return queue;
     };
 
     const saveDocx = async (dataBase64, suggested) => {
@@ -261,21 +300,39 @@ class DocxmdEditorProvider {
     };
 
     const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
-      if (e.document.uri.toString() === document.uri.toString() && !fromWebview) postUpdate();
+      if (e.document.uri.toString() !== key || !e.contentChanges.length) return;
+      const i = inFlight.indexOf(e.document.getText());
+      if (i >= 0) { inFlight.splice(0, i + 1); return; }   // one of our own edits (possibly an intermediate one)
+      inFlight.length = 0;
+      postUpdate();
     });
+
+    const saveHtml = async (html) => {
+      try {
+        const base = document.uri.path.replace(/\.(md|markdown)$/i, "");
+        const target = await vscode.window.showSaveDialog({ defaultUri: document.uri.with({ path: base + ".html" }), filters: { "HTML": ["html"] } });
+        if (!target) return;
+        await vscode.workspace.fs.writeFile(target, new Uint8Array(Buffer.from(String(html), "utf8")));
+        const pick = await vscode.window.showInformationMessage("Exported " + path.basename(target.fsPath), "Open in browser", "Reveal");
+        if (pick === "Open in browser") vscode.env.openExternal(target);
+        else if (pick === "Reveal") vscode.commands.executeCommand("revealFileInOS", target);
+      } catch (e) {
+        vscode.window.showErrorMessage("DOCXMD HTML export failed: " + e.message);
+      }
+    };
 
     const viewSub = webviewPanel.onDidChangeViewState(() => {
       if (webviewPanel.active) { activePanel = webviewPanel; activeDocument = document; }
     });
 
-    webview.onDidReceiveMessage((msg) => {
+    const msgSub = webview.onDidReceiveMessage((msg) => {
       if (!msg) return;
       if (msg.type === "ready") {
         postUpdate();
-        const key = document.uri.toString();
         if (pendingImports.has(key)) {
-          webview.postMessage({ type: "importDocx", dataBase64: pendingImports.get(key) });
+          const job = pendingImports.get(key);
           pendingImports.delete(key);
+          webview.postMessage({ type: "importDocx", dataBase64: job.data, name: job.name });
         }
       }
       else if (msg.type === "imported") {
@@ -283,6 +340,8 @@ class DocxmdEditorProvider {
           vscode.window.showInformationMessage("Imported Word document → " + path.basename(document.uri.fsPath)));
       }
       else if (msg.type === "edit") applyEdit(msg.text);
+      else if (msg.type === "save") Promise.resolve(applyEdit(msg.text)).then(() => document.save());
+      else if (msg.type === "saveHtml") saveHtml(msg.html);
       else if (msg.type === "saveDocx") saveDocx(msg.dataBase64, msg.name);
       else if (msg.type === "info") vscode.window.showInformationMessage(msg.text);
       else if (msg.type === "saveImage") {
@@ -341,6 +400,8 @@ class DocxmdEditorProvider {
     webviewPanel.onDidDispose(() => {
       changeSub.dispose();
       viewSub.dispose();
+      msgSub.dispose();
+      if (openPanels.get(key) === webviewPanel) openPanels.delete(key);
       if (activePanel === webviewPanel) { activePanel = null; activeDocument = null; }
     });
   }
@@ -352,8 +413,10 @@ class DocxmdEditorProvider {
   _html(webview) {
     const csp = webview.cspSource;
     const v = (...p) => this._uri(webview, ...p);
+    const lang = String(vscode.env.language || "en").slice(0, 2).toLowerCase();
+    const svg = (d) => '<svg viewBox="0 0 24 24" aria-hidden="true">' + d + "</svg>";
     return `<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="${lang}" data-lang="${lang}" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${csp} https: data: blob:; connect-src ${csp} https: data: blob:; style-src ${csp} 'unsafe-inline'; font-src ${csp}; script-src ${csp} 'unsafe-eval';">
@@ -364,84 +427,102 @@ class DocxmdEditorProvider {
 <link rel="stylesheet" href="${v("webview.css")}" />
 </head>
 <body>
-  <div class="bar">
+  <div class="bar" role="toolbar">
+    <button class="tb" id="outlineBtn" data-tt="view.outline" aria-pressed="false">${svg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>')}</button>
+    <span class="sep"></span>
     <div class="tools" id="toolbar">
-      <button class="tb" data-cmd="bold"><b>B</b></button>
-      <button class="tb" data-cmd="italic"><i>I</i></button>
-      <button class="tb" data-cmd="strike"><s>S</s></button>
-      <button class="tb" data-cmd="sup" title="Superscript (Ctrl+.)">x<sup>2</sup></button>
-      <button class="tb" data-cmd="sub" title="Subscript (Ctrl+,)">x<sub>2</sub></button>
-      <button class="tb" data-cmd="highlight" title="Highlight ==text== (Ctrl+Shift+H)"><span style="background:#fff176;color:#1a1a1a;padding:0 .2em;border-radius:3px;font-weight:700;font-size:.8rem">ab</span></button>
-      <button class="tb" data-cmd="symbols" title="Symbols">&Omega;</button>
-      <button class="tb" data-cmd="cleanNotation" title="Clean up scientific notation (indices, formulas, units)"><svg viewBox="0 0 24 24"><path d="M9 3h6"/><path d="M10 3v6.5L4.6 18.2A1.8 1.8 0 0 0 6.1 21h11.8a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 14h9"/></svg></button>
+      <button class="tb" data-cmd="bold" data-tt="tb.bold"><b>B</b></button>
+      <button class="tb" data-cmd="italic" data-tt="tb.italic"><i>I</i></button>
+      <button class="tb" data-cmd="strike" data-tt="tb.strike"><s>S</s></button>
+      <button class="tb" data-cmd="sup" data-tt="tb.sup">x<sup>2</sup></button>
+      <button class="tb" data-cmd="sub" data-tt="tb.sub">x<sub>2</sub></button>
+      <button class="tb" data-cmd="highlight" data-tt="tb.highlightKey"><span style="background:#fff176;color:#1a1a1a;padding:0 .2em;border-radius:3px;font-weight:700;font-size:.8rem">ab</span></button>
+      <button class="tb" data-cmd="symbols" data-tt="tb.symbols">&Omega;</button>
+      <button class="tb" data-cmd="cleanNotation" data-tt="tb.sciclean">${svg('<path d="M9 3h6"/><path d="M10 3v6.5L4.6 18.2A1.8 1.8 0 0 0 6.1 21h11.8a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 14h9"/>')}</button>
       <span class="sep"></span>
-      <button class="tb" data-cmd="h1">H1</button>
-      <button class="tb" data-cmd="h2">H2</button>
-      <button class="tb" data-cmd="h3">H3</button>
+      <button class="tb" data-cmd="h1" data-tt="tb.h1">H1</button>
+      <button class="tb" data-cmd="h2" data-tt="tb.h2">H2</button>
+      <button class="tb" data-cmd="h3" data-tt="tb.h3">H3</button>
       <span class="sep"></span>
-      <button class="tb" data-cmd="quote">&#8220;</button>
-      <button class="tb" data-cmd="callout" title="Callout block"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4z"/><line x1="12" y1="8" x2="12" y2="10.5"/><line x1="12" y1="13" x2="12.01" y2="13"/></svg></button>
-      <button class="tb" data-cmd="code">&lt;/&gt;</button>
-      <button class="tb" data-cmd="ul">&#8226;</button>
-      <button class="tb" data-cmd="ol">1.</button>
-      <button class="tb" data-cmd="task">&#10003;</button>
-      <button class="tb" data-cmd="link">🔗</button>
-      <button class="tb" data-cmd="table">▦</button>
+      <button class="tb" data-cmd="quote" data-tt="tb.quote">&#8220;</button>
+      <button class="tb" data-cmd="callout" data-tt="tb.callout">${svg('<path d="M4 4h16v12H9l-5 4z"/><line x1="12" y1="8" x2="12" y2="10.5"/><line x1="12" y1="13" x2="12.01" y2="13"/>')}</button>
+      <button class="tb" data-cmd="code" data-tt="tb.code">&lt;/&gt;</button>
+      <button class="tb" data-cmd="codeblock" data-tt="tb.codeblock">{ }</button>
+      <button class="tb" data-cmd="ul" data-tt="tb.ul">&#8226;</button>
+      <button class="tb" data-cmd="ol" data-tt="tb.ol">1.</button>
+      <button class="tb" data-cmd="task" data-tt="tb.task">&#10003;</button>
+      <button class="tb" data-cmd="link" data-tt="tb.link">🔗</button>
+      <button class="tb" data-cmd="image" data-tt="tb.image">🖼</button>
+      <button class="tb" data-cmd="table" data-tt="tb.table">▦</button>
+      <button class="tb" data-cmd="hr" data-tt="tb.hr">―</button>
       <span class="sep"></span>
-      <button class="tb" data-cmd="alignLeft" title="Align left"><svg viewBox="0 0 24 24"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg></button>
-      <button class="tb" data-cmd="alignCenter" title="Align center"><svg viewBox="0 0 24 24"><line x1="18" y1="10" x2="6" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="18" y1="18" x2="6" y2="18"/></svg></button>
-      <button class="tb" data-cmd="alignRight" title="Align right"><svg viewBox="0 0 24 24"><line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/></svg></button>
-      <button class="tb" data-cmd="alignJustify" title="Justify"><svg viewBox="0 0 24 24"><line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/></svg></button>
+      <button class="tb" data-cmd="alignLeft" data-tt="tb.alignLeft">${svg('<line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/>')}</button>
+      <button class="tb" data-cmd="alignCenter" data-tt="tb.alignCenter">${svg('<line x1="18" y1="10" x2="6" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="18" y1="18" x2="6" y2="18"/>')}</button>
+      <button class="tb" data-cmd="alignRight" data-tt="tb.alignRight">${svg('<line x1="21" y1="10" x2="7" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="7" y2="18"/>')}</button>
+      <button class="tb" data-cmd="alignJustify" data-tt="tb.alignJustify">${svg('<line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/>')}</button>
+      <span class="sep"></span>
+      <button class="tb" data-cmd="docmenu" data-tt="menu.document">${svg('<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>')}</button>
     </div>
     <span class="spacer"></span>
-    <button class="tb" id="findBtn" title="Find & replace (Ctrl+F)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
-    <button class="tb" id="helpBtn" title="Help &amp; guide (opens in browser)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></button>
-    <select id="translate" class="sel" title="Translate document (DeepL)">
-      <option value="">🌐 Translate…</option>
+    <button class="tb" id="findBtn" data-tt="view.find">${svg('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>')}</button>
+    <button class="tb" id="helpBtn" data-tt="help.title">${svg('<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>')}</button>
+    <select id="translate" class="sel" data-tt="translate.title">
+      <option value="" data-i18n="action.translate">Translate…</option>
       <option value="en">English</option>
       <option value="uk">Українська</option>
       <option value="es">Español</option>
       <option value="zh">中文</option>
     </select>
-    <select id="mode" class="sel" title="View">
-      <option value="split">Split</option>
-      <option value="source">Source</option>
-      <option value="preview">Preview</option>
+    <select id="mode" class="sel" data-tt="menu.view">
+      <option value="split" data-i18n="view.split">Split</option>
+      <option value="source" data-i18n="view.source">Source</option>
+      <option value="preview" data-i18n="view.preview">Preview</option>
     </select>
-    <select id="theme" class="sel" title="Theme">
-      <option value="dark">Dark</option>
-      <option value="white">White</option>
-      <option value="blue">Dark Blue</option>
-      <option value="green">Dark Green</option>
+    <select id="theme" class="sel" data-tt="menu.theme">
+      <option value="dark" data-i18n="theme.dark">Dark</option>
+      <option value="white" data-i18n="theme.white">White</option>
+      <option value="blue" data-i18n="theme.blue">Dark Blue</option>
+      <option value="green" data-i18n="theme.green">Dark Green</option>
     </select>
-    <button class="btn" id="exportBtn">DOCX</button>
+    <button class="btn" id="exportBtn" data-tt="action.exportDocx">DOCX</button>
   </div>
-  <div class="findbar" id="findbar">
-    <input id="findInput" placeholder="Find" />
-    <input id="replaceInput" placeholder="Replace" />
-    <span class="count" id="findCount"></span>
-    <button class="tb" id="findPrev" title="Previous">&#8593;</button>
-    <button class="tb" id="findNext" title="Next">&#8595;</button>
-    <button class="tb ra" id="replaceAllBtn">Replace all</button>
-    <button class="tb" id="findClose">&#10005;</button>
+  <div class="findbar" id="findbar" role="search">
+    <input id="findInput" data-ttph="find.placeholder" />
+    <span class="ftogs">
+      <button class="ftog" id="findRegex" data-tt="find.regex" aria-pressed="false">.*</button>
+      <button class="ftog" id="findCase" data-tt="find.case" aria-pressed="false">Aa</button>
+      <button class="ftog" id="findWord" data-tt="find.word" aria-pressed="false"><u>W</u></button>
+    </span>
+    <input id="replaceInput" data-ttph="find.replace" />
+    <span class="count" id="findCount" aria-live="polite"></span>
+    <button class="tb" id="findPrev" data-tt="find.prev">&#8593;</button>
+    <button class="tb" id="findNext" data-tt="find.next">&#8595;</button>
+    <button class="tb ra" id="replaceOneBtn" data-i18n="find.replaceOne" data-tt="find.replaceOneTip">Replace</button>
+    <button class="tb ra" id="replaceAllBtn" data-i18n="find.replaceAll" data-tt="find.replaceAllTip">Replace all</button>
+    <button class="tb" id="findClose" data-tt="btn.close">&#10005;</button>
   </div>
-  <div class="panes" id="panes">
-    <div class="pane-editor"><textarea id="source" spellcheck="true"></textarea></div>
-    <div id="preview" class="markdown-body"></div>
+  <div class="main" style="display:flex;flex:1 1 auto;min-height:0">
+    <nav class="outline hidden" id="outline" aria-label="Outline"><h4 data-i18n="outline.title">Outline</h4><div id="outlineList"></div></nav>
+    <div class="panes" id="panes">
+      <div class="pane-editor"><textarea id="source" spellcheck="true" aria-label="Markdown"></textarea></div>
+      <div id="preview" class="markdown-body" aria-label="Preview"></div>
+    </div>
   </div>
   <div class="statusbar" id="statusbar">
-    <span class="st"><b id="stWords">0</b>&nbsp;words</span>
-    <span class="st"><b id="stChars">0</b>&nbsp;chars</span>
-    <span class="st"><b id="stLines">0</b>&nbsp;lines</span>
-    <span class="st"><b id="stRead">0</b>&nbsp;min read</span>
+    <span class="st"><b id="stWords" role="button" tabindex="0" data-tt="stats.open">0</b>&nbsp;<span data-i18n="status.words">words</span></span>
+    <span class="st"><b id="stChars">0</b>&nbsp;<span data-i18n="status.chars">chars</span></span>
+    <span class="st"><b id="stLines">0</b>&nbsp;<span data-i18n="status.lines">lines</span></span>
+    <span class="st"><b id="stRead">0</b>&nbsp;<span data-i18n="status.reading">min read</span></span>
     <span class="spacer"></span>
     <span class="st navjump">
-      <button class="navbtn" id="navTop" title="Go to start">&#10514;</button>
+      <button class="navbtn" id="navTop" data-tt="nav.top">&#10514;</button>
       <span class="posbar" id="posbar"><span class="posfill" id="posfill"></span></span>
-      <button class="navbtn" id="navBottom" title="Go to end">&#10515;</button>
+      <button class="navbtn" id="navBottom" data-tt="nav.bottom">&#10515;</button>
       <b id="stPos">0%</b>
     </span>
   </div>
+  <div class="modal-scrim" id="modalScrim"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+  <script src="${v("i18n.js")}"></script>
   <script src="${v("vendor", "marked.min.js")}"></script>
   <script src="${v("vendor", "purify.min.js")}"></script>
   <script src="${v("vendor", "highlight.min.js")}"></script>
@@ -449,6 +530,7 @@ class DocxmdEditorProvider {
   <script src="${v("md2docx.js")}"></script>
   <script src="${v("docxfmt.js")}"></script>
   <script src="${v("imgresize.js")}"></script>
+  <script src="${v("previewedit.js")}"></script>
   <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
   <script src="${v("vendor", "turndown.min.js")}"></script>
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>

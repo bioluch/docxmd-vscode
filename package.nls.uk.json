@@ -1,0 +1,10 @@
+{
+  "ext.displayName": "DOCXMD — редактор Markdown і конвертер DOCX",
+  "editor.displayName": "Редактор DOCXMD",
+  "cmd.openWith": "Відкрити в редакторі DOCXMD",
+  "cmd.exportDocx": "Експорт у Word (.docx)",
+  "cmd.exportHtml": "Експорт у HTML",
+  "cmd.importDocx": "Імпорт Word (.docx) у Markdown",
+  "cmd.setDeeplKey": "Ключ DeepL API",
+  "cmd.cleanNotation": "Очистити наукову нотацію"
+}

@@ -2,14 +2,14 @@
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
   "description": "Edit Markdown with a live neumorphic preview, LaTeX math, callout blocks, highlights and colour boxes; clean up scientific notation; export to Word (.docx) with headers, footers and page numbers, and import Word back to Markdown — inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "publisher": "docxmd",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
     "Other",
-    "Formatters"
+    "Visualization"
   ],
   "keywords": [
     "markdown",
@@ -69,7 +69,7 @@
     "customEditors": [
       {
         "viewType": "docxmd.editor",
-        "displayName": "DOCXMD Editor",
+        "displayName": "%editor.displayName%",
         "selector": [
           {
             "filenamePattern": "*.md"
@@ -84,27 +84,32 @@
     "commands": [
       {
         "command": "docxmd.openWith",
-        "title": "DOCXMD: Open in DOCXMD Editor",
+        "title": "%cmd.openWith%",
         "category": "DOCXMD"
       },
       {
         "command": "docxmd.exportDocx",
-        "title": "DOCXMD: Export to Word (.docx)",
+        "title": "%cmd.exportDocx%",
+        "category": "DOCXMD"
+      },
+      {
+        "command": "docxmd.exportHtml",
+        "title": "%cmd.exportHtml%",
         "category": "DOCXMD"
       },
       {
         "command": "docxmd.importDocx",
-        "title": "DOCXMD: Import Word (.docx) to Markdown",
+        "title": "%cmd.importDocx%",
         "category": "DOCXMD"
       },
       {
         "command": "docxmd.setDeeplKey",
-        "title": "DOCXMD: Set DeepL API key",
+        "title": "%cmd.setDeeplKey%",
         "category": "DOCXMD"
       },
       {
         "command": "docxmd.cleanNotation",
-        "title": "DOCXMD: Clean up scientific notation",
+        "title": "%cmd.cleanNotation%",
         "category": "DOCXMD"
       }
     ],
@@ -114,6 +119,11 @@
           "command": "docxmd.exportDocx",
           "when": "activeCustomEditorId == docxmd.editor",
           "group": "navigation"
+        },
+        {
+          "command": "docxmd.exportHtml",
+          "when": "activeCustomEditorId == docxmd.editor",
+          "group": "1_export"
         }
       ],
       "explorer/context": [
@@ -126,6 +136,16 @@
           "command": "docxmd.importDocx",
           "when": "resourceExtname == .docx",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "docxmd.exportDocx",
+          "when": "activeCustomEditorId == docxmd.editor"
+        },
+        {
+          "command": "docxmd.exportHtml",
+          "when": "activeCustomEditorId == docxmd.editor"
         }
       ]
     }

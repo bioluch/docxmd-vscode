@@ -1,0 +1,10 @@
+{
+  "ext.displayName": "DOCXMD — Markdown 编辑器与 DOCX 转换器",
+  "editor.displayName": "DOCXMD 编辑器",
+  "cmd.openWith": "在 DOCXMD 编辑器中打开",
+  "cmd.exportDocx": "导出为 Word (.docx)",
+  "cmd.exportHtml": "导出为 HTML",
+  "cmd.importDocx": "将 Word (.docx) 导入为 Markdown",
+  "cmd.setDeeplKey": "设置 DeepL API 密钥",
+  "cmd.cleanNotation": "清理科学记数法"
+}
