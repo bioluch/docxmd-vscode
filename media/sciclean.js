@@ -181,7 +181,8 @@
     }
     if (fence) add(fStart, text.length);
     scanRe(/(`+)[\s\S]*?[^`]\1(?!`)|(`+)[^`\n]\2(?!`)/g);     // inline code
-    scanRe(/\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]/g);             // display math
+    // display math (same rules as the preview: \[ at a line start, \] ends its line, no blank line inside)
+    scanRe(/\$\$(?:(?!\n[ \t]*\n)[^$])+?\$\$|(?:^|\n)[ \t]{0,3}\\\[(?:(?!\n[ \t]*\n)[\s\S])+?\\\][ \t]*(?=\n|$)/g);
     scanRe(/<!--[\s\S]*?-->/g);                                // HTML comments
     scanRe(/<\/?[A-Za-z][^<>\n]*>/g);                          // HTML tags (+ attributes)
     scanRe(/\]\([^)\n]*\)|\]\[[^\]\n]*\]/g);                   // link / image targets

@@ -62,14 +62,25 @@
   const INLINE_DOLLAR = /^\$(?!\s)((?:\\\$|[^$\n])+?)(?<![\s\\])\$(?!\d)/;
   if (window.marked && window.katex) {
     marked.use({ extensions: [
+      // Display math \[ … \] / $$ … $$ — only where a block can start (line start), never
+      // across a blank line, and \] must end its line. Markdown-escaped brackets such as
+      // "!\[\](images/…)" or "\[\[file\]\]" (common after a Word import) stay text.
       { name: "mathBlock", level: "block",
-        start(src) { const m = src.match(/\\\[|\$\$/); return m ? m.index : undefined; },
-        tokenizer(src) { const m = /^\\\[([\s\S]+?)\\\]/.exec(src) || /^\$\$([\s\S]+?)\$\$/.exec(src); if (m) return { type: "mathBlock", raw: m[0], text: m[1] }; },
+        start(src) { const m = src.match(/(?:^|\n)[ \t]{0,3}(?:\\\[|\$\$)/); return m ? m.index + (m[0][0] === "\n" ? 1 : 0) : undefined; },
+        tokenizer(src) {
+          const m = /^[ \t]{0,3}\\\[((?:(?!\n[ \t]*\n)[\s\S])+?)\\\][ \t]*(?=\n|$)/.exec(src) || /^[ \t]{0,3}\$\$((?:(?!\n[ \t]*\n)[^$])+?)\$\$/.exec(src);
+          if (m) return { type: "mathBlock", raw: m[0], text: m[1] };
+        },
         renderer(tk) { const ph = mathPlaceholder(tk.text, true); return ph != null ? ph : "<pre>" + escapeHtml(tk.raw) + "</pre>"; } },
       { name: "mathInline", level: "inline",
-        start(src) { const m = src.match(/\\\(|(?<!\\)\$(?=\S)/); return m ? m.index : undefined; },
-        tokenizer(src) { const m = /^\\\(([\s\S]+?)\\\)/.exec(src) || INLINE_DOLLAR.exec(src); if (m) return { type: "mathInline", raw: m[0], text: m[1] }; },
-        renderer(tk) { const ph = mathPlaceholder(tk.text, false); return ph != null ? ph : escapeHtml(tk.raw); } }
+        start(src) { const m = src.match(/\\\(|(?<!\\)\$/); return m ? m.index : undefined; },
+        tokenizer(src) {
+          const d = /^\$\$([^$\n]+?)\$\$/.exec(src);      // $$…$$ mid-line: displayed, paragraph kept
+          if (d) return { type: "mathInline", raw: d[0], text: d[1], display: true };
+          const m = /^\\\(((?:(?!\n[ \t]*\n)[\s\S])+?)\\\)/.exec(src) || INLINE_DOLLAR.exec(src);
+          if (m) return { type: "mathInline", raw: m[0], text: m[1] };
+        },
+        renderer(tk) { const ph = mathPlaceholder(tk.text, !!tk.display); return ph != null ? ph : escapeHtml(tk.raw); } }
     ] });
   }
   // Shared Markdown extensions + numbering hooks (md2docx.js): boxes, callouts, alerts,

@@ -28,7 +28,7 @@
     s = s.replace(/(?:https?|mailto):\/?\/?\S+/g, push);   // bare URLs
     s = s.replace(/\$\$[^$\n]+\$\$/g, push);               // $$…$$ on one line
     s = s.replace(/\\\([\s\S]*?\\\)/g, push);              // \(…\) inline math
-    s = s.replace(/\\\[[\s\S]*?\\\]/g, push);              // \[…\] on one line
+    s = s.replace(/^\s*\\\[[^\n]*?\\\]\s*$/g, push);         // \[…\] as a whole line (not escaped brackets mid-text)
     s = s.replace(/\$[^$\n]+\$/g, push);                   // inline math
     s = s.replace(/\[\^[^\]\s]+\]:?/g, push);              // footnote refs / definitions
     s = s.replace(/\{#[a-z]+:[^}\n]*\}/g, push);            // {#fig:id} {#tbl:id} {#sec:id}
@@ -97,8 +97,10 @@
       }
       const fm = line.match(/^\s*(```+|~~~+)/);
       if (fm) { fence = fm[1][0]; out[i] = line; prevBlank = false; continue; }
-      if (/^\s*\$\$/.test(line)) { out[i] = line; if (!/^\s*\$\$[\s\S]*\$\$\s*$/.test(line.trim().length > 2 ? line : "")) math = "$$"; prevBlank = false; continue; }
-      if (/^\s*\\\[/.test(line)) { out[i] = line; if (!/\\\]\s*$/.test(line)) math = "\\["; prevBlank = false; continue; }
+      // a display-math line: "$$" / "\[" alone or with the formula; a line that merely starts
+      // with an escaped bracket ("\[1\] text", "\[\[file\]\]") is prose
+      if (/^\s*\$\$/.test(line) && (line.trim() === "$$" || /\$\$\s*$/.test(line.trim().slice(2)))) { out[i] = line; if (line.trim() === "$$" || !/\$\$\s*$/.test(line.trim().slice(2))) math = "$$"; prevBlank = false; continue; }
+      if (/^\s*\\\[/.test(line) && (/^\s*\\\[\s*$/.test(line) || (/\\\]\s*$/.test(line) && !/\\\]/.test(line.replace(/\\\]\s*$/, ""))))) { out[i] = line; if (!/\\\]\s*$/.test(line)) math = "\\["; prevBlank = false; continue; }
       if (!line.trim()) { out[i] = line; prevBlank = true; continue; }
       // indented code block (4 spaces / tab after a blank line, not a list continuation)
       const indented = /^(?: {4}|\t)/.test(line);

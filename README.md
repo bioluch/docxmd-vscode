@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **Fixed in 0.1.15:** escaped brackets such as `!\[\](images/…)` or `\[\[file\]\]` (typical after a Word import) are no longer taken for LaTeX display math — before, everything up to the next `\]` turned into a red formula error. See [What's new in 0.1.15](#whats-new-in-0115).
+>
 > **Fixed in 0.1.14:** importing Word no longer turns text like `<textarea>` or `&mdash;` into HTML (it could show up as a form field in the preview); inline code and code blocks survive a Markdown → Word → Markdown round trip (Word styles *Verbatim Char* / *Source Code*, as in Pandoc). See [What's new in 0.1.14](#whats-new-in-0114).
 >
 > **New in 0.1.13:** the editor catches up with the DOCXMD web app 1.5 — **interface in 4 languages** (follows VS Code's display language), **Outline** panel, **find & replace with regular expressions** (`$1`), match case and whole word, **synchronized scrolling**, **editing in the preview** (click text, ✎ / double-click a block), a **Document** menu (table of contents, numbered headings, footnote, caption, statistics, **HTML export**), six highlight colours; reliable sync with the VS Code document (no lost keystrokes, precise undo, `Ctrl+S` always saves the latest text). See [What's new in 0.1.13](#whats-new-in-0113).
@@ -163,6 +165,12 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots and HTML-styling recipes) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.1.15
+
+- **Display math only where it can be display math:** `\[ … \]` and `$$ … $$` start a formula block only at the start of a line, never span a blank line, and `\]` must end its line. Markdown-escaped brackets in the middle of text — `!\[\](images/…)`, `\[\[file#section\]\]`, `\[1\] Reference` — stay text (they used to swallow the following paragraphs, headings and tables into one red KaTeX error).
+- `$$…$$` in the middle of a sentence is shown as a displayed formula without breaking the paragraph.
+- The same rules apply to Word export, translation (escaped brackets are translated as normal text) and *Clean up scientific notation*.
 
 ## What's new in 0.1.14
 
