@@ -115,6 +115,12 @@
   }
 
   /* ---------- editing in the preview (shared with the PWA: previewedit.js) ---------- */
+  let tableEdit = null;      // DOCXMDTableEdit (attached below, refreshed after every render)
+  // Embedded pictures (data-URIs) live outside the editor text (media/embedfold.js): the textarea
+  // holds #embedded-image-N tokens; the VS Code document always gets the full text (docText()).
+  const FOLD = window.DOCXMDFold || null, IMGS = FOLD ? FOLD.store() : null;
+  const foldText = (x) => (FOLD ? FOLD.fold(x, IMGS) : x);
+  const docText = () => (FOLD ? FOLD.expand(ta.value, IMGS) : ta.value);
   const PE = window.DOCXMDPreviewEdit ? DOCXMDPreviewEdit.attach({
     preview,
     getText: () => ta.value,
@@ -125,6 +131,14 @@
     toast: (m) => info(m),
     pasteHtml: () => ED.pasteHtml()
   }) : { beforeRender() {}, annotateBlocks() {}, setBlocks() {}, close() {}, hideHandle() {}, busy: () => false };
+
+  // Tables in the preview: column widths, table width, row heights, position, cell alignment
+  tableEdit = window.DOCXMDTableEdit ? DOCXMDTableEdit.attach({
+    preview, getText: () => ta.value,
+    editRange: (s, e, text) => editRange(s, e, text), render: () => renderNow(), pe: PE,
+    enabled: () => mode() !== "source" && store.get("docxmd:previewEdit", "1") === "1",
+    t: (k, v) => t(k, v), toast: (m) => info(m)
+  }) : null;
 
   // Toolbar text style: font, size, colour — of the selection, or of the whole document
   // (front matter) when nothing is selected; also in Preview mode (media/textstyle.js)
@@ -156,7 +170,10 @@
     PE.annotateBlocks(preview);
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     enhanceTables(preview);
+    if (tableEdit) tableEdit.refresh();
     imgResize.refresh();       // remembers each image's Markdown src first…
+    // embedded pictures: #embedded-image-N → an object URL made once per picture
+    if (FOLD) $$("img", preview).forEach((im) => { const s = im.getAttribute("src"); if (FOLD.isToken(s)) { const u = FOLD.urlOf(IMGS, s); if (u) im.src = u; } });
     // …then relative pictures (images/image-001.png) load from the document's folder
     if (docBase) $$("img", preview).forEach((im) => { const s = im.getAttribute("src"); if (isRelative(s)) im.setAttribute("src", resolveRel(s)); });
     const heads = $$("h1,h2,h3,h4,h5,h6", preview);
@@ -196,7 +213,7 @@
   // not overwritten by a stale round-trip.
   function flushEdit() {
     clearTimeout(editTimer); editTimer = null;
-    vscode.postMessage({ type: "edit", text: ta.value });
+    vscode.postMessage({ type: "edit", text: docText() });
   }
   function pushEdit() {
     if (applying) return;
@@ -209,15 +226,16 @@
   window.addEventListener("message", (ev) => {
     const msg = ev.data || {};
     if (msg.type === "update" && msg.name) docName = msg.name;
-    if (msg.type === "update" && msg.base != null && msg.base !== docBase) { docBase = msg.base; if (msg.text === ta.value) render(); }
+    const incoming = msg.type === "update" && typeof msg.text === "string" ? foldText(msg.text) : null;
+    if (msg.type === "update" && msg.base != null && msg.base !== docBase) { docBase = msg.base; if (incoming === ta.value) render(); }
     if (msg.type === "imageSaved") { const p = __imgPending[msg.id]; if (p) { delete __imgPending[msg.id]; p(msg.path || null); } return; }
     if (msg.type === "update") {
-      if (msg.text !== ta.value) {
+      if (incoming !== ta.value) {
         // an external change (VS Code undo, another editor, git…) wins over an unsent local burst
         clearTimeout(editTimer); editTimer = null;
         const s = ta.selectionStart, e = ta.selectionEnd, top = ta.scrollTop;
         applying = true;
-        ta.value = msg.text;
+        ta.value = incoming;
         try { ta.setSelectionRange(Math.min(s, ta.value.length), Math.min(e, ta.value.length)); } catch (x) {}
         ta.scrollTop = top;
         applying = false;
@@ -254,7 +272,7 @@
     tlSel.disabled = true;
     try {
       const out = await MDTranslate.run(md, { target: target, provider: "deepl" });
-      vscode.postMessage({ type: "openTranslated", text: out, lang: target });
+      vscode.postMessage({ type: "openTranslated", text: FOLD ? FOLD.expand(out, IMGS) : out, lang: target });   // a new document gets the real pictures
     } catch (e) {
       // No key (prompt cancelled): the host already shows a warning with "Get a free key" / "Open Settings"
       if (!/No DeepL API key/i.test(String(e && e.message))) vscode.postMessage({ type: "error", text: "Translate failed: " + (e && e.message) });
@@ -270,10 +288,45 @@
     try { return fn(); }
     finally { if (hidden) { panes.classList.remove("edit-shadow"); try { ta.blur(); } catch (e) {} } }
   }
+  // Chrome fires an "input" event for every line of a multi-line execCommand insert: while we
+  // insert, those events are stopped before any handler runs, and exactly one is sent afterwards.
+  let bulkEdit = false;
+  ta.addEventListener("input", (e) => { if (bulkEdit) e.stopImmediatePropagation(); }, true);
+  // Chrome reveals the caret after every line of a multi-line insert / undo and walks all the
+  // scrolling ancestors each time — a relayout of the whole page per line (a table edit in a big
+  // document took half a minute). Pinned in place (position:fixed at the same spot) the editor
+  // has no scrolling ancestors: the same edit takes a fraction of a second.
+  let pinDepth = 0, pinSaved = null;
+  function pinEditor() {
+    if (pinDepth++) return;
+    const ta = ta, r = ta.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    pinSaved = ta.style.cssText;
+    Object.assign(ta.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", margin: "0", boxSizing: "border-box" });
+  }
+  function unpinEditor() {
+    if (--pinDepth > 0) return;
+    pinDepth = 0;
+    if (pinSaved == null) return;
+    const ta = ta, top = ta.scrollTop;
+    ta.style.cssText = pinSaved; pinSaved = null;
+    ta.scrollTop = top;
+  }
+  // Ctrl+Z / Ctrl+Y replay a whole multi-line edit the same way: pinned, one "input" at the end
+  ta.addEventListener("keydown", (e) => {
+    const k = (e.key || "").toLowerCase();
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || !(k === "z" || k === "y")) return;
+    pinEditor(); bulkEdit = true;
+    setTimeout(() => { bulkEdit = false; unpinEditor(); ta.dispatchEvent(new Event("input", { bubbles: true })); }, 0);
+  }, true);
   function replaceSel(text, selectInserted) {
     ta.focus();
     let ok = false;
+    const multi = (text.match(/\n/g) || []).length > 2;
+    bulkEdit = true;
+    if (multi) pinEditor();
     try { ok = document.execCommand("insertText", false, text); } catch (e) {}
+    finally { bulkEdit = false; if (multi) unpinEditor(); }
     if (!ok) {
       const s = ta.selectionStart, e = ta.selectionEnd;
       ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
@@ -282,7 +335,16 @@
     if (selectInserted) { const end = ta.selectionStart; ta.selectionStart = end - text.length; ta.selectionEnd = end; }
     ta.dispatchEvent(new Event("input", { bubbles: true }));
   }
-  function editRange(s, e, text) { withEditor(() => { ta.setSelectionRange(s, e); replaceSel(text); }); }
+  function editRange(s, e, text) {
+    // only the part that really changes goes through execCommand: Chrome inserts multi-line text
+    // line by line (slow), and a table / style edit usually differs in a few characters
+    const old = ta.value.slice(s, e);
+    let p = 0; while (p < old.length && p < text.length && old[p] === text[p]) p++;
+    let q = 0; while (q < old.length - p && q < text.length - p && old[old.length - 1 - q] === text[text.length - 1 - q]) q++;
+    if (p === old.length && p === text.length) return;
+    s += p; e -= q; text = text.slice(p, text.length - q);
+    withEditor(() => { ta.setSelectionRange(s, e); replaceSel(text); });
+  }
   function wrap(a, b, ph) {
     const s = ta.selectionStart, e = ta.selectionEnd;
     const sel = ta.value.slice(s, e) || ph || "";
@@ -579,15 +641,28 @@
     });
     const s = ta.selectionStart;
     const atLineStart = s === 0 || ta.value[s - 1] === "\n";
-    withEditor(() => replaceSel((atLineStart ? "" : "\n") + "![" + alt + "](" + (saved || dataUrl) + ")\n"));
+    withEditor(() => replaceSel((atLineStart ? "" : "\n") + "![" + alt + "](" + (saved || foldText(dataUrl)) + ")\n"));
     info(saved ? t("toast.imageSaved", { path: saved }) : t("toast.imageEmbedded", { size: humanSize(file.size) }));
   }
   const isImageFile = (f) => f && /^image\//.test(f.type || "");
+  // Copy / cut from the editor: tokens become the real pictures again
+  ["copy", "cut"].forEach((ev) => ta.addEventListener(ev, (e) => {
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    if (!FOLD || a === b || !e.clipboardData) return;
+    const sel = ta.value.slice(a, b);
+    if (sel.indexOf(FOLD.PREFIX) === -1) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", FOLD.expand(sel, IMGS));
+    if (ev === "cut") withEditor(() => replaceSel(""));
+  }));
   ta.addEventListener("paste", (e) => {
     const items = (e.clipboardData && e.clipboardData.items) || [];
     const imgs = [];
     for (const it of items) { if (it.kind === "file" && /^image\//.test(it.type)) { const f = it.getAsFile(); if (f) imgs.push(f); } }
     if (imgs.length) { e.preventDefault(); (async () => { for (const f of imgs) await insertImageFile(f); })(); return; }
+    // text with embedded pictures (data-URIs) → tokens, the pictures go to the store
+    const plain0 = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
+    if (FOLD && FOLD.has(plain0)) { e.preventDefault(); plainPaste = false; replaceSel(foldText(plain0)); return; }
     if (plainPaste) { plainPaste = false; return; }
     if (!window.DOCXMDEdit || !e.clipboardData) return;
     const link = DOCXMDEdit.pasteLink(ta.value, ta.selectionStart, ta.selectionEnd, e.clipboardData.getData("text/plain"));
@@ -642,6 +717,7 @@
     requestAnimationFrame(() => { syncing = false; });
   }
   ta.addEventListener("scroll", () => {
+    if (bulkEdit) return;                          // the caret jumping line by line during an insert
     if (editorBackdrop) { editorBackdrop.scrollTop = ta.scrollTop; editorBackdrop.scrollLeft = ta.scrollLeft; }
     if (mode() === "split") syncFrom(ta, preview);
     if (mode() !== "preview") updatePos();
@@ -903,7 +979,7 @@
     else editorBackdrop.innerHTML = window.MD2DOCX && MD2DOCX.backdropHtml ? MD2DOCX.backdropHtml(v, hits, q ? cur : -1, escapeHtml).html : "";
     editorBackdrop.scrollTop = ta.scrollTop; editorBackdrop.scrollLeft = ta.scrollLeft;
   }
-  function syncActiveLine() { if (editorBackdrop && window.DOCXMDHighlight && (ED.syntax() || ED.lines())) DOCXMDHighlight.setActive(editorBackdrop, ta.selectionStart); }
+  function syncActiveLine() { if (bulkEdit) return; if (editorBackdrop && window.DOCXMDHighlight && (ED.syntax() || ED.lines())) DOCXMDHighlight.setActive(editorBackdrop, ta.selectionStart); }
   ["selectionchange", "keyup", "click", "focus"].forEach((ev) => ta.addEventListener(ev, syncActiveLine));
   document.addEventListener("selectionchange", () => { if (document.activeElement === ta) syncActiveLine(); });
   let paintTimer = null;
@@ -984,7 +1060,7 @@
     const mod = e.ctrlKey || e.metaKey;
     const k = (e.key || "").toLowerCase();
     // Ctrl+S: send the latest text with the save request — never a stale save
-    if (mod && k === "s" && !e.shiftKey && !e.altKey) { e.preventDefault(); PE.close(true); clearTimeout(editTimer); editTimer = null; vscode.postMessage({ type: "save", text: ta.value }); return; }
+    if (mod && k === "s" && !e.shiftKey && !e.altKey) { e.preventDefault(); PE.close(true); clearTimeout(editTimer); editTimer = null; vscode.postMessage({ type: "save", text: docText() }); return; }
     const ae = document.activeElement;
     if (ae && (ae.isContentEditable || (ae.closest && ae.closest(".block-editor")))) return;   // typing in a preview editor
     if (mod && k === "f") { e.preventDefault(); toggleFind(true); }
@@ -1031,7 +1107,8 @@
     const btn = $("#exportBtn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
     try {
       const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
-      const blob = await window.MD2DOCX.toBlob(md, { title: docName, quoteColor: accent, resolveUrl: resolveRel });
+      const blob = await window.MD2DOCX.toBlob(md, { title: docName, quoteColor: accent, resolveUrl: resolveRel,
+        resolveAsset: (src) => (FOLD && FOLD.isToken(src) ? FOLD.blobOf(IMGS, src) : null) });
       const buf = await blob.arrayBuffer();
       vscode.postMessage({ type: "saveDocx", dataBase64: abToB64(buf) });
     } catch (e) {
@@ -1053,6 +1130,7 @@
     try { tmp.innerHTML = DOMPurify.sanitize(marked.parse(md), { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] }); }
     finally { mathOutput = "htmlAndMathml"; }
     if (mathStore.length) $$(".katex-ph", tmp).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
+    if (FOLD) $$("img", tmp).forEach((im) => { const s = im.getAttribute("src"); if (FOLD.isToken(s)) { const d = FOLD.dataOf(IMGS, s); if (d) im.setAttribute("src", d); } });
     enhanceTables(tmp);
     const fm = window.MD2DOCX && MD2DOCX.parseFrontMatter ? MD2DOCX.parseFrontMatter(md) : null;
     const meta = (fm && fm.meta) || {};
@@ -1083,7 +1161,7 @@
       // mammoth + table colours / widths, picture sizes, font sizes, alignment, front matter (shared with the PWA)
       const md = await DOCXFMT.toMarkdown(u8.buffer, fileBase || "");
       clearTimeout(editTimer); editTimer = null;
-      applying = true; ta.value = md; applying = false; render();
+      applying = true; ta.value = foldText(md); applying = false; render();
       vscode.postMessage({ type: "imported", text: md });
     } catch (e) {
       vscode.postMessage({ type: "error", text: "DOCX import failed: " + (e && e.message) });

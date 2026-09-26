@@ -121,7 +121,13 @@
       if (e.clientX > r.left - 12 && e.clientX < r.right + 12 && e.clientY > r.top - 12 && e.clientY < r.bottom + 12) return;
       hide();
     }, { passive: true });
-    document.addEventListener("scroll", () => { if (cur) place(); }, true);
+    // only scrolling that moves the picture matters (not the editor's own scroll), once per frame
+    let scrollRaf = 0;
+    document.addEventListener("scroll", (e) => {
+      const tg = e.target;
+      if (!cur || scrollRaf || !(tg === document || (tg && tg.contains && tg.contains(cur)))) return;
+      scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; if (cur) place(); });
+    }, true);
     global.addEventListener("resize", () => { if (cur) place(); });
 
     handle.addEventListener("pointerdown", (e) => {

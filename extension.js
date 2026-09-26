@@ -538,6 +538,8 @@ class DocxmdEditorProvider {
   <script src="${v("mdedit.js")}"></script>
   <script src="${v("mdhighlight.js")}"></script>
   <script src="${v("textstyle.js")}"></script>
+  <script src="${v("tableedit.js")}"></script>
+  <script src="${v("embedfold.js")}"></script>
   <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
   <script src="${v("vendor", "turndown.min.js")}"></script>
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>

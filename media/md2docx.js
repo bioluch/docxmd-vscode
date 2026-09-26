@@ -701,6 +701,10 @@
     const cols = Array.from(table.querySelectorAll("col")).filter((c) => c.closest("table") === table)
       .map((c) => parseFloat(cssProps(c).width || c.getAttribute("width")) || 0);
     const useCols = cols.length > 1 && cols.every((x) => x > 0);
+    const hasW = /%$/.test(String(tCss.width || "").trim());
+    // position: margin-left / margin-right auto (or the old align attribute)
+    const tAlign = (table.getAttribute("align") || "").toLowerCase() ||
+      (/auto/.test(tCss["margin-left"] || "") ? (/auto/.test(tCss["margin-right"] || "") ? "center" : "right") : "");
     const colTw = useCols ? cols.map((x) => Math.round(TEXT_TWIPS * tPct / 100 * x / cols.reduce((a, b) => a + b, 0))) : null;
     const tStyle = cssRunFmt(tCss, {});
     for (const tr of Array.from(table.rows)) {
@@ -731,11 +735,15 @@
         if (c.rowSpan > 1) opts.rowSpan = c.rowSpan;
         return new D.TableCell(opts);
       });
-      if (cells.length) rows.push(new D.TableRow({ tableHeader: inHead || undefined, children: cells }));
+      // <tr style="height:NNpx"> → a minimum row height (px → twips)
+      const hpx = parseFloat(trCss.height || tr.getAttribute("height")) || 0;
+      const height = hpx > 0 ? { value: Math.round(hpx * 15), rule: D.HeightRule ? D.HeightRule.ATLEAST : "atLeast" } : undefined;
+      if (cells.length) rows.push(new D.TableRow({ tableHeader: inHead || undefined, children: cells, height }));
     }
     return new D.Table(Object.assign({
       rows,
-      width: { size: useCols ? tPct : 100, type: D.WidthType.PERCENTAGE },
+      width: { size: useCols || hasW ? tPct : 100, type: D.WidthType.PERCENTAGE },
+      alignment: tAlign === "center" ? D.AlignmentType.CENTER : tAlign === "right" ? D.AlignmentType.RIGHT : undefined,
       borders: {
         top: { style: D.BorderStyle.SINGLE, size: 2, color: "CCCCCC" },
         bottom: { style: D.BorderStyle.SINGLE, size: 2, color: "CCCCCC" },

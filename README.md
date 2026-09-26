@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.4.0:** **big documents are fast** — pictures embedded as base64 show as short `#embedded-image-N` tokens in the editor (the VS Code document keeps the full data), and multi-line changes no longer freeze the editor. **Tables in Preview mode** — drag column borders, the table's right edge and row edges; place the table **left / centre / right**; align text and pictures in a cell, row, column or the whole table (**9 positions**); equal columns and reset. Everything goes into the Word export and back through the Word import. See [What's new in 0.4.0](#whats-new-in-040).
+>
 > **New in 0.3.0:** **font, font size and text colour** from the toolbar (**Aa** / size / **A**) — for the selected text (also in Preview mode) or, with nothing selected, for the whole document (front matter `font:` / `font-size:`, used by the preview and the Word export). **Word import** now keeps **font sizes**, **centred / right-aligned paragraphs and pictures**, and **table column widths** — pictures in tables no longer stick out of their column. See [What's new in 0.3.0](#whats-new-in-030).
 >
 > **New in 0.2.1:** the complete **smart editing in Preview mode** (it was missing from the 0.2.0 package on the Marketplace) — in the quick text edit `Enter` adds list items and splits paragraphs, `Tab` / `Shift+Tab` change list levels and move between table cells, `Alt+↑/↓` move items, rows and blocks, `Ctrl+B` / `Ctrl+I` and `* = ~` format the selection, pasted links and formatted text become Markdown; pasting formatted text keeps the spaces around links and bold text; nested task lists keep their parent's number in the preview; a full [Keyboard shortcuts](#keyboard-shortcuts) table. See [What's new in 0.2.1](#whats-new-in-021).
@@ -54,6 +56,7 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - **Smart paste** — text copied from Word, Google Docs or a web page becomes Markdown; a URL pasted onto selected text becomes a link; `Ctrl+Shift+V` pastes plain text.
 - **Markdown syntax highlighting, line numbers and the current line** in the editor (Document menu → Editor).
 - **Align table** (`Ctrl+Shift+T`) — straight columns in the pipe table under the cursor.
+- **Tables in Preview mode** — hover a table: drag column borders (widths), the right edge (table width) and row edges (row height); a small bar places the table left / centre / right, aligns cell content (cell, row, column or table × 9 positions), makes columns equal or resets sizes. A Markdown pipe table becomes an HTML table on the first change.
 - **Font, size and colour** (toolbar **Aa** / size / **A**) — selected text gets `<span style="font-size:14pt">…</span>` (a second choice updates the same span); nothing selected → the whole document via front matter `font:` / `font-size:`. Works in the source, the ✎ block editor and Preview mode; exported to Word as real run formatting and default font / size.
 - Live preview with synchronized Markdown source and rendered document.
 - Formatting toolbar for common Markdown editing operations.
@@ -201,6 +204,21 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.4.0
+
+Shared with the DOCXMD web app 1.8 (new `media/tableedit.js`; updated `md2docx.js`, `docxfmt.js`, `previewedit.js`):
+
+- **Column widths:** drag the border between two columns in the preview; a badge shows the shares (`45% · 55%`). Written as `<colgroup><col style="width:45%">…` with `table-layout:fixed`; pictures shrink to their column. Double-click a border: automatic widths.
+- **Table width:** drag the right edge (15–100 % of the page) → `<table style="width:69%">`; double-click: automatic.
+- **Row height:** drag the bottom edge of a row → `<tr style="height:80px">` (a minimum height in Word); double-click: automatic.
+- **Position:** bar buttons left / centre / right → `margin-left / margin-right: auto` (Word: table alignment). A full-width table becomes 80 % so it can move.
+- **Cell alignment:** click a cell (blue frame), then ▤ — scope *Cell / Row / Column / Whole table* and 9 positions (top / middle / bottom × left / centre / right) → `text-align` + `vertical-align`, for text and pictures; *Default alignment* removes it.
+- **Equal columns** and **reset** (widths, heights, position).
+- A Markdown pipe table can't hold these settings: the first change rewrites it as an HTML table (text and formatting kept). Every change is one undoable edit.
+- **Big documents are fast** (`media/embedfold.js`): a picture embedded as base64 (hundreds of KB of text, e.g. after a Word import) is shown in the editor as a short token — `![](#embedded-image-3)`. The VS Code document, saving, the Word / HTML export, copy and translation always get the full data, so the `.md` file is unchanged. A document with 60 embedded pictures (15 MB) used to take ~8 s per keystroke in the editor; now ~70 ms.
+- **Multi-line edits without freezing:** Chrome inserts multi-line text into a text box line by line, revealing the caret after each line — in a big document that cost seconds per line (half a minute for a table edit). The editor now changes only the part that really differs, stays pinned in place during such an insert and during Ctrl+Z / Ctrl+Y, and handles one change event instead of hundreds: aligning all 120 cells of a table ~0.4 s (was ~27 s), undo ~0.14 s (was ~9 s).
+- **Word export / import:** table alignment (`w:jc`), minimum row heights (`w:trHeight`), widths without `<colgroup>`; importing a Word document restores the position and explicit row heights.
 
 ## What's new in 0.3.0
 

@@ -552,7 +552,7 @@
     function beforeRender() { if (pe.block) closeBlockEditor(false); if (pe.quick) endQuickEdit(false); }
     function setBlocks(blocks, src) { pe.blocks = blocks || []; pe.src = src; }
     function close(apply) { if (pe.quick) endQuickEdit(apply); if (pe.block) closeBlockEditor(apply); }
-    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, applyToBlock,
+    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, applyToBlock, blockRange,
       busy: () => !!(pe.block || pe.quick) };
   }
 

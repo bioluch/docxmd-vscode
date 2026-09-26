@@ -176,7 +176,10 @@
             delete f.autoColor;
             return f;
           }));
-        tables.push({ rows, cols: gridCols(tbl), width: tableWidth(tbl, textW) });
+        // position on the page (w:jc) and explicit row heights (w:trHeight, twips → px)
+        const tjc = JC[wval(kid(kid(tbl, "tblPr"), "jc"))];
+        const heights = kids(tbl, "tr").map((tr) => { const h = kid(kid(tr, "trPr"), "trHeight"); const v = h ? +wval(h) || 0 : 0; return v >= 300 ? Math.round(v / 15) : 0; });
+        tables.push({ rows, cols: gridCols(tbl), width: tableWidth(tbl, textW), jc: tjc === "center" || tjc === "right" ? tjc : null, heights });
       }
       return { tables, images: extractImages(doc) };
     } catch (e) {
@@ -293,6 +296,9 @@
       });
       // unequal Word columns: only an HTML table can keep their widths
       if (tf.cols && Math.max(...tf.cols) - Math.min(...tf.cols) > 100 / tf.cols.length * 0.3) rich = true;
+      if (tf.jc || (tf.heights && tf.heights.some(Boolean))) rich = true;
+      if (rich && tf.jc) table.setAttribute("data-docxmd-jc", tf.jc);
+      if (rich && tf.heights) rows.forEach((tr, ri) => { if (tf.heights[ri]) tr.setAttribute("data-docxmd-h", String(tf.heights[ri])); });
       if (rich && tf.cols) table.setAttribute("data-docxmd-cols", tf.cols.join(","));
       if (rich && tf.width) table.setAttribute("data-docxmd-width", String(tf.width));
       if (rich) table.setAttribute("data-docxmd-html", "1");
@@ -319,6 +325,8 @@
     // Word's column widths: a fixed layout, so pictures shrink to their column
     const st = cols.length ? ["width:" + (tw || 100) + "%", "table-layout:fixed"] : [];
     if (getCss(table, "font-size")) st.push("font-size:" + getCss(table, "font-size"));
+    const jc = table.getAttribute("data-docxmd-jc");
+    if (jc) { if (!cols.length) st.push("width:" + (tw && +tw < 100 ? tw : 80) + "%"); st.push("margin-left:auto"); if (jc === "center") st.push("margin-right:auto"); }
     const out = [st.length ? '<table style="' + st.join(";") + '">' : "<table>"];
     if (cols.length) out.push("<colgroup>" + cols.map((c) => '<col style="width:' + c + '%">').join("") + "</colgroup>");
     const attrs = (el) => ["colspan", "rowspan", "style"].filter((a) => el.hasAttribute(a))
@@ -338,7 +346,8 @@
     for (const [tag, rows] of groups) {
       if (tag) out.push("<" + tag + ">");
       for (const tr of rows) {
-        out.push("<tr>");
+        const h = tr.getAttribute("data-docxmd-h");
+        out.push(h ? '<tr style="height:' + h + 'px">' : "<tr>");
         for (const c of tr.cells) {
           const t = c.nodeName.toLowerCase();
           out.push("<" + t + attrs(c) + ">" + cellHtml(c) + "</" + t + ">");
