@@ -116,6 +116,7 @@
 
   /* ---------- editing in the preview (shared with the PWA: previewedit.js) ---------- */
   let tableEdit = null;      // DOCXMDTableEdit (attached below, refreshed after every render)
+  let textStyle = null;      // DOCXMDTextStyle (toolbar font / size / colour / bold / italic)
   // Embedded pictures (data-URIs) live outside the editor text (media/embedfold.js): the textarea
   // holds #embedded-image-N tokens; the VS Code document always gets the full text (docText()).
   const FOLD = window.DOCXMDFold || null, IMGS = FOLD ? FOLD.store() : null;
@@ -129,7 +130,9 @@
     enabled: () => store.get("docxmd:previewEdit", "1") === "1" && mode() !== "source",
     t: (k) => t(k),
     toast: (m) => info(m),
-    pasteHtml: () => ED.pasteHtml()
+    pasteHtml: () => ED.pasteHtml(),
+    // Ctrl+B / Ctrl+I in the quick edit: the same toggle as the toolbar (also in HTML blocks)
+    toggleFormat: (what) => (textStyle ? (textStyle.toggle(what), true) : false)
   }) : { beforeRender() {}, annotateBlocks() {}, setBlocks() {}, close() {}, hideHandle() {}, busy: () => false };
 
   // Tables in the preview: column widths, table width, row heights, position, cell alignment
@@ -142,14 +145,14 @@
 
   // Toolbar text style: font, size, colour — of the selection, or of the whole document
   // (front matter) when nothing is selected; also in Preview mode (media/textstyle.js)
-  if (window.DOCXMDTextStyle) DOCXMDTextStyle.attach({
+  textStyle = window.DOCXMDTextStyle ? DOCXMDTextStyle.attach({
     root: $("#toolbar"), source: ta, pe: PE, previewEl: preview,
     isPreview: () => mode() === "preview",
     editRange: (s, e, text) => editRange(s, e, text),
     render: () => renderNow(),
     afterEdit: () => { if (typeof syncActiveLine === "function") syncActiveLine(); },
     t: (k, v) => t(k, v), toast: (m) => info(m)
-  });
+  }) : null;
 
   /* ---------- preview ---------- */
   let renderTimer = null;
@@ -572,8 +575,9 @@
     symbols: () => openSymbols(),
     callout: () => openCallouts(),
     docmenu: () => openDocMenu(),
-    bold: () => wrap("**", "**", t("tb.bold")),
-    italic: () => wrap("*", "*", t("tb.italic")),
+    // in Preview the source is hidden: bold / italic toggle the preview selection
+    bold: () => (mode() === "preview" && textStyle ? textStyle.toggle("bold") : wrap("**", "**", t("tb.bold"))),
+    italic: () => (mode() === "preview" && textStyle ? textStyle.toggle("italic") : wrap("*", "*", t("tb.italic"))),
     strike: () => wrap("~~", "~~", t("tb.strike")),
     code: () => wrap("`", "`", "code"),
     codeblock: () => wrap("```\n", "\n```", "code"),
@@ -1064,6 +1068,7 @@
     const ae = document.activeElement;
     if (ae && (ae.isContentEditable || (ae.closest && ae.closest(".block-editor")))) return;   // typing in a preview editor
     if (mod && k === "f") { e.preventDefault(); toggleFind(true); }
+    else if (mod && (k === "b" || k === "i") && !e.shiftKey && !e.altKey && mode() === "preview" && textStyle) { e.preventDefault(); textStyle.toggle(k === "b" ? "bold" : "italic"); }
     else if (mod && e.shiftKey && k === "h") { e.preventDefault(); toggleMark("yellow"); }
     else if (mod && e.key === ".") { e.preventDefault(); cmds.sup(); }
     else if (mod && e.key === ",") { e.preventDefault(); cmds.sub(); }

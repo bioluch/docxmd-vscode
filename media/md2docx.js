@@ -597,6 +597,10 @@
   const cssFont = (v) => { const f = String(v || "").split(",")[0].trim().replace(/^["']|["']$/g, ""); return f && !/^(inherit|initial|serif|sans-serif|monospace|system-ui)$/i.test(f) ? f : null; };
   function cssRunFmt(css, st) {
     const hp = cssSizeHp(css["font-size"]); if (hp) st.size = hp;
+    const fw = String(css["font-weight"] || "").trim();
+    if (/^(bold|bolder|[6-9]00)$/i.test(fw)) st.bold = true; else if (/^(normal|lighter|[1-5]00)$/i.test(fw)) st.bold = false;
+    const fs = String(css["font-style"] || "").trim();
+    if (/^(italic|oblique)/i.test(fs)) st.italics = true; else if (/^normal$/i.test(fs)) st.italics = false;
     const f = cssFont(css["font-family"]); if (f) st.font = f;
     const c = cssColor(css.color); if (c) st.color = c;
     return st;
@@ -621,7 +625,9 @@
     if (hl && HIGHLIGHTS[hl[1]]) st.highlight = HIGHLIGHTS[hl[1]];
     const c = cssColor(css.color || el.getAttribute("color")); if (c) st.color = c;
     if (/bold|[6-9]00/.test(css["font-weight"] || "")) st.bold = true;
-    if (css["font-style"] === "italic") st.italics = true;
+    else if (/^(normal|lighter|[1-5]00)$/.test(css["font-weight"] || "")) st.bold = false;
+    if (/italic|oblique/.test(css["font-style"] || "")) st.italics = true;
+    else if (css["font-style"] === "normal") st.italics = false;
     if (/underline/.test(css["text-decoration"] || "")) st.underline = true;
     if (/line-through/.test(css["text-decoration"] || "")) st.strike = true;
     const hp = cssSizeHp(css["font-size"]); if (hp) st.size = hp;
@@ -633,10 +639,20 @@
   // Walk a cell's DOM into Word paragraphs (inline runs + simple block handling)
   function htmlCellChildren(cell, style, align, ctx, maxW) {
     const D = ctx.D, out = [];
-    let runs = [], curAlign = align;
+    let runs = [], curAlign = align, curIndent = null;
     const flush = (force) => {
-      if (runs.length || force) out.push(new D.Paragraph({ children: runs, alignment: mapAlign(curAlign, D), spacing: { after: 0 } }));
+      if (runs.length || force) out.push(new D.Paragraph(Object.assign({ children: runs, alignment: mapAlign(curAlign, D), spacing: { after: 0 } }, curIndent ? { indent: curIndent } : {})));
       runs = [];
+    };
+    // list markers of <ul style="list-style-type:…"> / <ol start type> (imported PDF / Word cells)
+    const LIST_MARK = { circle: "o", square: "\u25AA", disc: "\u2022", none: "" };
+    const olMark = (k, type) => {
+      if (/alpha/.test(type)) { const c = String.fromCharCode(96 + ((k - 1) % 26) + 1); return /upper/.test(type) ? c.toUpperCase() : c; }
+      if (/roman/.test(type)) {
+        let r = "", v = k; [[10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]].forEach(([n, x]) => { while (v >= n) { r += x; v -= n; } });
+        return /upper/.test(type) ? r.toUpperCase() : r;
+      }
+      return String(k);
     };
     (function walk(node, st, listInfo) {
       for (const n of node.childNodes) {
@@ -663,12 +679,25 @@
           continue;
         }
         if (tag === "code") { runs.push(new D.TextRun({ text: n.textContent, style: "VerbatimChar", font: "Consolas", size: 20, color: st.color })); continue; }
-        if (tag === "ul" || tag === "ol") { flush(); walk(n, st, { ordered: tag === "ol", n: 0 }); continue; }
+        if (tag === "ul" || tag === "ol") {
+          flush();
+          const css = cssProps(n), type = (css["list-style-type"] || n.getAttribute("type") || "").toLowerCase();
+          const typeName = { a: "lower-alpha", A: "upper-alpha", i: "lower-roman", I: "upper-roman" }[n.getAttribute("type")] || type;
+          const start = parseInt(n.getAttribute("start"), 10);
+          walk(n, st, { ordered: tag === "ol", n: (start > 0 ? start : 1) - 1, type: typeName, depth: listInfo ? listInfo.depth + 1 : 0 });
+          continue;
+        }
         if (tag === "li") {
           flush();
-          const mark = listInfo && listInfo.ordered ? (++listInfo.n) + ". " : "• ";
-          runs.push(mkRun(mark, st, D));
-          walk(n, elFmt(n, st), listInfo); flush(); continue;
+          const L = listInfo || { ordered: false, n: 0, type: "", depth: 0 };
+          const mark = L.ordered ? olMark(++L.n, L.type) + ". " : (L.type in LIST_MARK ? LIST_MARK[L.type] : (/['"]/.test(L.type) ? L.type.replace(/^['"]|['"]$/g, "").trim() : "\u2022")) + "\t";
+          // each level indented, the marker hanging in front of the text
+          const saved = curIndent;
+          curIndent = { left: 360 * (L.depth + 1), hanging: 360 };
+          if (mark.trim()) runs.push(mkRun(mark.replace(/\t$/, " "), st, D));
+          walk(n, elFmt(n, st), L); flush();
+          curIndent = saved;
+          continue;
         }
         const block = HTML_BLOCK.test(tag);
         if (block) flush();
@@ -706,6 +735,10 @@
     const tAlign = (table.getAttribute("align") || "").toLowerCase() ||
       (/auto/.test(tCss["margin-left"] || "") ? (/auto/.test(tCss["margin-right"] || "") ? "center" : "right") : "");
     const colTw = useCols ? cols.map((x) => Math.round(TEXT_TWIPS * tPct / 100 * x / cols.reduce((a, b) => a + b, 0))) : null;
+    // a table with a width but no column grid (e.g. a 1-column frame of a PDF import): an even
+    // grid, else docx.js writes 100-twip columns that some readers keep that narrow
+    const nCols = Math.max(0, ...Array.from(table.rows).map((tr) => Array.from(tr.cells).reduce((n, c) => n + (c.colSpan || 1), 0)));
+    const evenGrid = !useCols && hasW && nCols > 0 ? Array(nCols).fill(Math.round(TEXT_TWIPS * tPct / 100 / nCols)) : null;
     const tStyle = cssRunFmt(tCss, {});
     for (const tr of Array.from(table.rows)) {
       const inHead = tr.parentNode && tr.parentNode.nodeName === "THEAD";
@@ -752,7 +785,7 @@
         insideHorizontal: { style: D.BorderStyle.SINGLE, size: 2, color: "DDDDDD" },
         insideVertical: { style: D.BorderStyle.SINGLE, size: 2, color: "DDDDDD" }
       }
-    }, useCols ? { columnWidths: colTw, layout: D.TableLayoutType.FIXED } : {}));
+    }, useCols ? { columnWidths: colTw, layout: D.TableLayoutType.FIXED } : evenGrid ? { columnWidths: evenGrid } : {}));
   }
 
   function parseHtmlTable(raw) {

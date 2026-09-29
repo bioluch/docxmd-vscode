@@ -11,9 +11,9 @@
    applied first, then the list / table / line / wrap operation, as one undoable edit —
    and editing continues at the resulting place (a new list item, the next cell…).
    Exposes: window.DOCXMDPreviewEdit.attach({ preview, getText, editRange(s,e,text),
-     render(), enabled(), t(key), toast(msg, kind), pasteHtml() })
+     render(), enabled(), t(key), toast(msg, kind), pasteHtml(), toggleFormat("bold"|"italic") })
      -> { pe, annotateBlocks(root), setBlocks(blocks, src), close(apply), hideHandle(),
-          busy() } */
+          sourceSelection(), reopenAt(s, e), selectSource(s, e), applyToBlock(fn), busy() } */
 (function (global) {
   "use strict";
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -346,6 +346,7 @@
       if (ctrl && e.shiftKey && (e.key === "T" || e.key === "t")) { handled((tx, s) => E.alignTable(tx, s) || { noop: true }); return; }
       if (ctrl && !e.shiftKey && !e.altKey && /^[bi]$/i.test(e.key)) {
         e.preventDefault();
+        if (!collapsed && o.toggleFormat) { e.stopPropagation(); o.toggleFormat(e.key.toLowerCase() === "b" ? "bold" : "italic"); return; }
         if (!collapsed) quickOp((tx, s, en) => { const m = e.key.toLowerCase() === "b" ? "**" : "*"; return { start: s, end: en, text: m + tx.slice(s, en) + m, selStart: s + m.length, selEnd: en + m.length }; });
         return;
       }
@@ -509,37 +510,173 @@
     // first) or a plain selection inside one paragraph / list item / table cell. null: none.
     function sourceSelection() {
       if (pe.block) return null;
+      if (pe.quick) {
+        // text selected outside the open quick edit: leave it (nothing typed → no re-render)
+        const sl = window.getSelection(), q = pe.quick;
+        if (sl && sl.rangeCount && !sl.isCollapsed && !q.c.contains(sl.getRangeAt(0).startContainer)) {
+          if (qeText(q.c).replace(/ /g, " ").replace(/\n+$/, "") !== q.old) { endQuickEdit(true); return null; }
+          detachQuick();
+        }
+      }
       if (!pe.quick) {
         const sel = window.getSelection();
         if (!sel || !sel.rangeCount || sel.isCollapsed || !preview.contains(sel.anchorNode)) return null;
-        const rg = sel.getRangeAt(0), c = qeContainer(rg.startContainer);
+        const rg = sel.getRangeAt(0);
+        // through the rendered text of the block (works for Markdown and HTML blocks alike)
+        const ts = textSelection(rg);
+        if (!ts.unmapped) return ts;
+        const c = qeContainer(rg.startContainer);
         const t0 = c ? textOffset(c, rg.startContainer, rg.startOffset) : 0, t1 = c ? textOffset(c, rg.endContainer, rg.endOffset) : 0;
-        if (!c || !c.contains(rg.endContainer) || !startQuickEdit(c, -1, -1)) return textSelection(rg);
+        if (!c || !c.contains(rg.endContainer) || !startQuickEdit(c, -1, -1)) return ts;
         setCaret(c, t0, t1);
       }
+      // the quick edit: its typed text is committed first (that re-renders the preview)
       let out = null;
       quickOp((tx, s, e) => { out = { s, e }; return { start: s, end: s, text: "", selStart: s, selEnd: e }; }, false);
       if (pe.quick) detachQuick();
-      return out && out.e > out.s ? out : null;
+      return out && out.e > out.s ? pieces(out.s, out.e) : null;
     }
-    // A selection the quick edit cannot take (HTML blocks, e.g. imported tables): find the
-    // selected text in the block's source — the same occurrence (counted in the rendered
-    // block before the selection). { s, e } or { unmapped: true }.
-    function textSelection(rg) {
-      const txt = rg.toString();
-      const el = rg.startContainer.nodeType === 1 ? rg.startContainer : rg.startContainer.parentElement;
+    // [s, e) of the source → its plain-text pieces (no tag, entity or emphasis marker is cut),
+    // so a range that crosses the <span> runs of a PDF import is styled piece by piece
+    function pieces(s, e) {
+      let n = -1;
+      for (let i = 0; i < pe.blocks.length; i++) { const b = pe.blocks[i]; if (b.start <= s && s < b.end) { n = i; break; } }
+      const r = n >= 0 && blockRange(n);
+      if (!r || e > r.end) return { s, e };
+      const vm = visibleMap(getText().slice(r.start, r.end), r.start, r.type === "html"), src = getText();
+      const segs = [];
+      for (let k = 0; k < vm.at.length; k++) {
+        if (vm.at[k] < s || vm.to[k] > e) continue;
+        const last = segs[segs.length - 1];
+        if (last && vm.at[k] === last[1]) last[1] = vm.to[k];
+        else segs.push([vm.at[k], vm.to[k]]);
+      }
+      const keep = segs.filter((g) => src.slice(g[0], g[1]).trim());
+      if (!keep.length) return { s, e };
+      return { s: keep[0][0], e: keep[keep.length - 1][1], segs: keep, html: r.type === "html" };
+    }
+    // The visible text of a block's source — tags left out, entities decoded, and (for
+    // Markdown) escapes and emphasis markers skipped — with the source range of every
+    // character: { text, at[k] (start in the source), to[k] (end in the source) }.
+    const TAG_RE = /<!--[\s\S]*?-->|<\/?[A-Za-z][^<>]*>/y;
+    const ENT_RE = /&(?:#\d{1,7}|#x[0-9a-f]{1,6}|[a-z][a-z0-9]{1,31});/iy;
+    let entBox = null;
+    function visibleMap(src, base, html) {
+      let text = ""; const at = [], to = [];
+      const put = (s, a, b) => { for (const ch of s) { text += ch; at.push(base + a); to.push(base + b); } };
+      for (let i = 0; i < src.length;) {
+        const ch = src[i];
+        if (ch === "<") { TAG_RE.lastIndex = i; const m = TAG_RE.exec(src); if (m) { i += m[0].length; continue; } }
+        if (ch === "&") {
+          ENT_RE.lastIndex = i; const m = ENT_RE.exec(src);
+          if (m) {
+            entBox = entBox || document.createElement("textarea");
+            entBox.innerHTML = m[0];
+            put(entBox.value, i, i + m[0].length); i += m[0].length; continue;
+          }
+        }
+        if (!html) {
+          if (ch === "\\" && /[!-\/:-@\[-`{-~]/.test(src[i + 1] || "")) { put(src[i + 1], i, i + 2); i += 2; continue; }
+          if (ch === "*" || ch === "`") { i++; continue; }
+          if ((ch === "~" || ch === "=") && src[i + 1] === ch) { i += 2; continue; }
+          if (ch === "_" && !(/[\p{L}\p{N}]/u.test(src[i - 1] || "") && /[\p{L}\p{N}]/u.test(src[i + 1] || ""))) { i++; continue; }
+        }
+        put(ch, i, i + 1); i++;
+      }
+      return { text, at, to };
+    }
+    // The rendered text of block n: its text nodes in order, with their start offsets
+    function domText(n) {
+      const nodes = []; let text = "";
+      blockEls(n).forEach((root) => {
+        const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let x = w.nextNode(); x; x = w.nextNode()) {
+          if (x.parentElement && x.parentElement.closest(".katex,.katex-ph,.pe-handle")) continue;
+          nodes.push({ node: x, start: text.length }); text += x.nodeValue;
+        }
+      });
+      const offset = (node, off) => {
+        if (node.nodeType === 3) { const k = nodes.find((x) => x.node === node); if (k) return k.start + Math.min(off, node.nodeValue.length); }
+        const p = document.createRange(); p.setStart(node, off);
+        for (const k of nodes) if (p.comparePoint(k.node, 0) > 0) return k.start;
+        return text.length;
+      };
+      const point = (k) => {
+        for (const x of nodes) if (k <= x.start + x.node.nodeValue.length) return [x.node, Math.max(0, k - x.start)];
+        const last = nodes[nodes.length - 1];
+        return last ? [last.node, last.node.nodeValue.length] : null;
+      };
+      return { text, offset, point };
+    }
+    const blockOf = (node) => {
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
       const b = el && el.closest("[data-b]");
-      const r = b && blockRange(+b.dataset.b);
-      if (!txt.trim() || /\n/.test(txt) || !r) return { unmapped: true };
-      const src = getText().slice(r.start, r.end);
-      const pre = document.createRange(); pre.setStart(b, 0); pre.setEnd(rg.startContainer, rg.startOffset);
-      let nth = 0, i = -1; const before = pre.toString();
-      while ((i = before.indexOf(txt, i + 1)) >= 0) nth++;
-      let at = -1; for (let k = 0; k <= nth; k++) { at = src.indexOf(txt, at + 1); if (at < 0) return { unmapped: true }; }
-      return { s: r.start + at, e: r.start + at + txt.length };
+      return b && preview.contains(b) ? +b.dataset.b : null;
+    };
+    // A selection the quick edit cannot take (HTML blocks, e.g. imported tables, or runs of
+    // inline HTML), mapped through the block's visible text. It may cross tags (several
+    // <span> runs, table cells): segs = the plain-text pieces of the source it covers, so a
+    // style never wraps a tag boundary. { s, e, segs, html } or { unmapped: true }.
+    function textSelection(rg) {
+      const n = blockOf(rg.startContainer);
+      if (n == null || blockOf(rg.endContainer) !== n) return { unmapped: true };
+      const r = blockRange(n);
+      if (!r || r.type === "frontMatter" || r.type === "code") return { unmapped: true };
+      const html = r.type === "html";
+      const vm = visibleMap(getText().slice(r.start, r.end), r.start, html), dt = domText(n);
+      let k0, k1;
+      if (dt.text === vm.text) { k0 = dt.offset(rg.startContainer, rg.startOffset); k1 = dt.offset(rg.endContainer, rg.endOffset); }
+      else {
+        // the rendered text differs from the source (list numbers, links…): find the occurrence
+        const txt = rg.toString();
+        if (!txt.trim() || /\n/.test(txt)) return { unmapped: true };
+        const before = dt.text.slice(0, dt.offset(rg.startContainer, rg.startOffset));
+        let nth = 0, i = -1; while ((i = before.indexOf(txt, i + 1)) >= 0) nth++;
+        let at = -1; for (let k = 0; k <= nth; k++) { at = vm.text.indexOf(txt, at + 1); if (at < 0) return { unmapped: true }; }
+        k0 = at; k1 = at + txt.length;
+      }
+      while (k0 < k1 && /\s/.test(vm.text[k0])) k0++;
+      while (k1 > k0 && /\s/.test(vm.text[k1 - 1])) k1--;
+      if (k1 <= k0) return { unmapped: true };
+      const segs = [];
+      for (let k = k0; k < k1; k++) {
+        const last = segs[segs.length - 1];
+        if (last && vm.at[k] === last[1]) last[1] = vm.to[k];
+        else segs.push([vm.at[k], vm.to[k]]);
+      }
+      // a piece of blanks only (between two tags) carries nothing to style
+      const src = getText();
+      const keep = segs.filter((g) => src.slice(g[0], g[1]).trim());
+      if (!keep.length) return { unmapped: true };
+      return { s: keep[0][0], e: keep[keep.length - 1][1], segs: keep, html };
     }
-    // re-open the quick edit on [s, e) after a toolbar edit (keeps the selection visible)
-    function reopenAt(s, e) { try { return startQuickEditAt(s, e); } catch (x) { return false; } }
+    // Select [s, e) of the source in the preview (a plain DOM selection) — after a toolbar
+    // edit of a block the quick edit cannot open (HTML blocks, inline HTML).
+    function selectSource(s, e) {
+      let n = -1;
+      for (let i = 0; i < pe.blocks.length; i++) { const b = pe.blocks[i]; if (b.start <= s && s < b.end) { n = i; break; } }
+      const r = n >= 0 && blockRange(n);
+      if (!r) return false;
+      const vm = visibleMap(getText().slice(r.start, r.end), r.start, r.type === "html"), dt = domText(n);
+      if (dt.text !== vm.text) return false;
+      const k0 = vm.at.findIndex((x) => x >= s);
+      let k1 = -1;
+      for (let k = vm.at.length - 1; k >= 0; k--) if (vm.at[k] < e) { k1 = k + 1; break; }
+      if (k0 < 0 || k1 <= k0) return false;
+      const a = dt.point(k0), b = dt.point(k1);
+      if (!a || !b) return false;
+      // start inside the next text node, not at the end of the previous one
+      if (a[1] === a[0].nodeValue.length) { const q = dt.point(k0 + 1); if (q && q[0] !== a[0]) { a[0] = q[0]; a[1] = 0; } }
+      const rg = document.createRange(); rg.setStart(a[0], a[1]); rg.setEnd(b[0], b[1]);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rg);
+      return true;
+    }
+    // re-open the quick edit on [s, e) after a toolbar edit (keeps the selection visible);
+    // where the quick edit cannot open, the text is selected again instead
+    function reopenAt(s, e) {
+      try { if (startQuickEditAt(s, e)) return true; } catch (x) {}
+      try { return selectSource(s, e); } catch (x) { return false; }
+    }
     // run fn(text, s, e) → mdedit action inside the open block editor; false: none open
     function applyToBlock(fn) {
       const b = pe.block; if (!b) return false;
@@ -552,7 +689,7 @@
     function beforeRender() { if (pe.block) closeBlockEditor(false); if (pe.quick) endQuickEdit(false); }
     function setBlocks(blocks, src) { pe.blocks = blocks || []; pe.src = src; }
     function close(apply) { if (pe.quick) endQuickEdit(apply); if (pe.block) closeBlockEditor(apply); }
-    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, applyToBlock, blockRange,
+    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, selectSource, applyToBlock, blockRange,
       busy: () => !!(pe.block || pe.quick) };
   }
 

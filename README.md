@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.5.0:** **bold and italic in Preview mode** — the **B** / **I** buttons (and `Ctrl+B` / `Ctrl+I`) switch bold / italic of the selected text **on and off**, also inside HTML tables and imported text. **Font, size and colour** from the toolbar now apply exactly to the selected text in Preview — even when the selection runs over several differently styled pieces or table cells — and the text stays selected. **Word export:** lists inside table cells keep their levels and markers. See [What's new in 0.5.0](#whats-new-in-050).
+>
 > **New in 0.4.0:** **big documents are fast** — pictures embedded as base64 show as short `#embedded-image-N` tokens in the editor (the VS Code document keeps the full data), and multi-line changes no longer freeze the editor. **Tables in Preview mode** — drag column borders, the table's right edge and row edges; place the table **left / centre / right**; align text and pictures in a cell, row, column or the whole table (**9 positions**); equal columns and reset. Everything goes into the Word export and back through the Word import. See [What's new in 0.4.0](#whats-new-in-040).
 >
 > **New in 0.3.0:** **font, font size and text colour** from the toolbar (**Aa** / size / **A**) — for the selected text (also in Preview mode) or, with nothing selected, for the whole document (front matter `font:` / `font-size:`, used by the preview and the Word export). **Word import** now keeps **font sizes**, **centred / right-aligned paragraphs and pictures**, and **table column widths** — pictures in tables no longer stick out of their column. See [What's new in 0.3.0](#whats-new-in-030).
@@ -106,7 +108,8 @@ On macOS use `Cmd` instead of `Ctrl`. Editing keys work in the Markdown source, 
 | `Ctrl+/` | Comment out / in with `<!-- -->` |
 | `Ctrl+Shift+T` | Align the table under the cursor |
 | `Ctrl+V` / `Ctrl+Shift+V` | Paste (images are saved to `images/`, formatted text becomes Markdown, a URL on selected text becomes a link) / paste plain text |
-| `*` `_` `` ` `` `=` `~` `(` `[` `"` | With text selected: wrap it — `*…*`, `==…==`, `~~…~~`, `` `…` ``; another `*` makes it bold. In Preview also `Ctrl+B` / `Ctrl+I` |
+| `*` `_` `` ` `` `=` `~` `(` `[` `"` | With text selected: wrap it — `*…*`, `==…==`, `~~…~~`, `` `…` ``; another `*` makes it bold |
+| `Ctrl+B` / `Ctrl+I` | Bold / italic. In Preview: switches bold / italic of the selected text on and off (same as the **B** / **I** buttons), also in HTML tables and imported text |
 | `Esc`, then `Tab` | Leave the editor with the keyboard (`Tab` is otherwise captured) |
 | Click · ✎ / double-click / `Alt+click` | Preview: edit text in place · edit the Markdown of a whole block |
 | `Shift+Enter` · `Ctrl+Enter` | Apply the quick edit · apply the block editor (`Esc` cancels) |
@@ -204,6 +207,15 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.5.0
+
+Shared with the DOCXMD web app 1.9 (updated `textstyle.js`, `previewedit.js`, `md2docx.js`, `i18n.js`):
+
+- **Bold / italic in Preview:** the **B** and **I** toolbar buttons (and `Ctrl+B` / `Ctrl+I`) now work on the text selected in the preview and **toggle**: if all of the selection is bold, it becomes normal, otherwise bold (same for italic). In Markdown text they add or remove `**` / `*`; in HTML — tables, text imported from Word or PDF — they set `font-weight` / `font-style` on a `<span>` (“off” writes `normal`, so it also works inside a bold header cell). Before, in Preview these buttons wrapped the hidden source's selection instead.
+- **Font, size and colour of a selection in Preview:** a selection in text made of several `<span>` runs (typical for PDF / Word imports) or across table cells is now found in the source reliably; each plain-text piece is styled on its own, so no tag boundary is ever wrapped and the formatting of the neighbouring text is not changed. After the change the same text is selected again — apply font, size, colour, B and I one after another. When selected text cannot be located, you get a message — the style is **never** applied to the whole document instead (before, the size could land in the front matter and the selection vanished).
+- **Word export:** `font-weight: normal` / `font-style: normal` in a span turn bold / italic **off** (also inside bold headings or `**…**`); lists inside HTML table cells keep their levels (indented, hanging marker) and their markers (`circle`, `square`, `lower-alpha`, `<ol start>`…); a table with a width but no `<colgroup>` gets an even column grid.
+- **Preview:** tables imported from PDF (`class="pdf-import-table"`) keep only their own shading (no zebra rows).
 
 ## What's new in 0.4.0
 

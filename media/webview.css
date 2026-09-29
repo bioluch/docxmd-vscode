@@ -137,6 +137,11 @@ body {
 .markdown-body .tbl-wrap.scroll { overflow-x: auto; }
 .markdown-body table { border-collapse: separate; border-spacing: 0; margin: 0 0 1em; width: auto; max-width: 100%; border: 1px solid var(--border-subtle); border-radius: 10px; }
 .markdown-body .tbl-wrap > table { margin: 0; }
+/* PDF imports: frames / nested tables keep the PDF's own shading only (no zebra) */
+.markdown-body table.pdf-import-table { max-width: none; }
+.markdown-body table.pdf-import-table td:not([style*="background"]) { background: transparent; }
+.markdown-body table.pdf-import-table td > :last-child { margin-bottom: 0; }
+.markdown-body table.pdf-import-table .tbl-wrap { margin: .3em 0; }
 .markdown-body th, .markdown-body td { border: 0; border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); padding: .5em .8em; vertical-align: top; }
 .markdown-body tr > :last-child { border-right: 0; }
 .markdown-body tbody tr:last-child > * { border-bottom: 0; }
