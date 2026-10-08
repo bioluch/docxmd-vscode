@@ -1127,6 +1127,37 @@
   // Preview pass for links whose target is still missing — e.g. headings written as
   // raw HTML (<h3> inside an HTML table) or an older import: match against the
   // rendered headings the same way. Call after heading ids are assigned.
+  // Justified text with hard line breaks (two spaces / <br>): CSS never stretches a line
+  // that ends in <br>, Word does. Each piece before a <br> of a justified paragraph, item
+  // or cell becomes <span class="jl"> (display:block; text-align-last:justify — the PWA's
+  // app.css / the webview.css and both HTML exports); the text is unchanged, the <br> stays (hidden).
+  const JL_BLOCK = "p,div,ul,ol,table,pre,blockquote,figure,h1,h2,h3,h4,h5,h6";
+  function justifyBreaks(root) {
+    const alignOf = (n) => {
+      for (let x = n; x && x !== root; x = x.parentElement) {
+        const ta = x.style && x.style.textAlign; if (ta) return ta;
+        const a = x.getAttribute("align"); if (a) return a.toLowerCase();
+      }
+      return "";
+    };
+    Array.from(root.querySelectorAll("p,li,td,th,h1,h2,h3,h4,h5,h6,div")).forEach((el) => {
+      if (!el.querySelector(":scope > br") || alignOf(el) !== "justify") return;
+      let seg = [];
+      const flush = (br) => {
+        const text = seg.some((n) => n.nodeType === 1 || (n.nodeType === 3 && n.nodeValue.trim()));
+        const block = seg.some((n) => n.nodeType === 1 && n.matches(JL_BLOCK));
+        if (text && !block) {
+          const sp = document.createElement("span");
+          sp.className = "jl";
+          el.insertBefore(sp, seg[0]);
+          seg.forEach((n) => sp.appendChild(n));
+          br.classList.add("jl-br");
+        }
+        seg = [];
+      };
+      Array.from(el.childNodes).forEach((n) => { if (n.nodeName === "BR") flush(n); else seg.push(n); });
+    });
+  }
   function fixPreviewLinks(root) {
     const links = Array.from(root.querySelectorAll('a[href^="#"]'));
     if (!links.length) return;
@@ -1827,7 +1858,7 @@
 
   global.MD2DOCX = { toBlob, ready, extensions, colorBoxExtension, boxColor, colorName, BOX_COLORS,
     CALLOUTS, calloutKind, calloutByColor, isDefaultCalloutTitle, isNumericCell, dataImageRanges, backdropHtml,
-    markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, imageRanges, imageWidthEdit, widthCss,
+    markedConfig, bookmarkName, NUMBERING_RE, fixPreviewLinks, justifyBreaks, imageRanges, imageWidthEdit, widthCss,
     parseFrontMatter, docFont, applyDocFont, docStats, highlightName, HIGHLIGHTS, HL_FROM_WORD,
     setBlockMarks(on) { BLOCK_MARKS = !!on; }, blocks: () => (DOC.blocks || []).slice(), editContainers };
 })(typeof window !== "undefined" ? window : this);

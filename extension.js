@@ -443,6 +443,8 @@ class DocxmdEditorProvider {
       <button class="tb" data-ts="font" data-tt="tb.fontFamily"><span class="ts-ico">Aa</span></button>
       <button class="tb" data-ts="size" data-tt="tb.fontSize">${svg('<path d="M3 7V5h11v2"/><path d="M8.5 5v14"/><path d="M13 12v-1.5h8V12"/><path d="M17 10.5V19"/>')}</button>
       <button class="tb" data-ts="color" data-tt="tb.fontColor"><span class="ts-ico ts-a">A<i></i></span></button>
+      <button class="tb" data-ts="upper" data-tt="tb.upper"><span class="ts-ico">AA</span></button>
+      <button class="tb" data-ts="lower" data-tt="tb.lower"><span class="ts-ico">aa</span></button>
       <span class="sep"></span>
       <button class="tb" data-cmd="h1" data-tt="tb.h1">H1</button>
       <button class="tb" data-cmd="h2" data-tt="tb.h2">H2</button>

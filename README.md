@@ -2,6 +2,8 @@
 
 Edit Markdown with a live neumorphic preview, export to Word (`.docx`) and import Word back to Markdown — directly inside VS Code.
 
+> **New in 0.6.0:** **alignment that always works** — left / centre / right / justify can follow each other in any order (an existing `<div align>` is replaced, never nested) and work **in Preview mode** on the paragraph under the caret or selection; **justify** stretches lines ending in a hard line break, as in Word, and overrides alignment written by a Word import. New **AA / aa** buttons turn the selected text into UPPERCASE / lowercase (tags and link addresses are kept). **Quick edit in Preview:** text typed at the start of a line after a hard line break now lands on that line, and `Enter` there splits the paragraph. See [What's new in 0.6.0](#whats-new-in-060).
+>
 > **New in 0.5.0:** **bold and italic in Preview mode** — the **B** / **I** buttons (and `Ctrl+B` / `Ctrl+I`) switch bold / italic of the selected text **on and off**, also inside HTML tables and imported text. **Font, size and colour** from the toolbar now apply exactly to the selected text in Preview — even when the selection runs over several differently styled pieces or table cells — and the text stays selected. **Word export:** lists inside table cells keep their levels and markers. See [What's new in 0.5.0](#whats-new-in-050).
 >
 > **New in 0.4.0:** **big documents are fast** — pictures embedded as base64 show as short `#embedded-image-N` tokens in the editor (the VS Code document keeps the full data), and multi-line changes no longer freeze the editor. **Tables in Preview mode** — drag column borders, the table's right edge and row edges; place the table **left / centre / right**; align text and pictures in a cell, row, column or the whole table (**9 positions**); equal columns and reset. Everything goes into the Word export and back through the Word import. See [What's new in 0.4.0](#whats-new-in-040).
@@ -62,7 +64,8 @@ Companion to the [DOCXMD PWA](https://docxmd.pp.ua/). The web app remains fully 
 - **Font, size and colour** (toolbar **Aa** / size / **A**) — selected text gets `<span style="font-size:14pt">…</span>` (a second choice updates the same span); nothing selected → the whole document via front matter `font:` / `font-size:`. Works in the source, the ✎ block editor and Preview mode; exported to Word as real run formatting and default font / size.
 - Live preview with synchronized Markdown source and rendered document.
 - Formatting toolbar for common Markdown editing operations.
-- **Text & image alignment** (left / center / right / justify) — renders in the preview and is honoured on DOCX export.
+- **Text & image alignment** (left / center / right / justify) — in the source and in Preview mode; any alignment replaces the previous one; renders in the preview and is honoured on DOCX export.
+- **UPPERCASE / lowercase** (toolbar **AA** / **aa**) — of the selected text, in the source, the ✎ block editor and Preview mode.
 - **Insert images** by pasting (`Ctrl+V`) or dragging a file onto the editor — saved to `images/` next to the document with a relative link (or embedded as a data-URI: setting `docxmd.pastedImages`, and always for untitled documents).
 - **Clean up scientific notation** — MinerU/LaTeX leftovers, chemical formulas and units, reviewed in a list before anything changes.
 - **Highlights** `==text==`, `==red:text==` — Word text highlighting in DOCX.
@@ -113,6 +116,7 @@ On macOS use `Cmd` instead of `Ctrl`. Editing keys work in the Markdown source, 
 | `Esc`, then `Tab` | Leave the editor with the keyboard (`Tab` is otherwise captured) |
 | Click · ✎ / double-click / `Alt+click` | Preview: edit text in place · edit the Markdown of a whole block |
 | `Shift+Enter` · `Ctrl+Enter` | Apply the quick edit · apply the block editor (`Esc` cancels) |
+| `Enter` at a hard line break | Preview quick edit: split the paragraph right there (the break marker is removed) |
 
 ## Usage
 
@@ -169,7 +173,7 @@ Press `Ctrl+F` (or the 🔍 button) to open the find bar. Type a query and press
 
 ### Alignment & images
 
-Use the alignment buttons in the toolbar to wrap the current block in `<div align="…">` (left / center / right / justify). Paste an image from the clipboard with `Ctrl+V`, or drag an image file onto the editor — it is written to `images/image-001.png` (the next free number) in the folder of the `.md` and a relative link `![…](images/image-001.png)` is inserted. Set `docxmd.pastedImages` to `embed` to keep the old behaviour (a base64 data-URI inside the text); untitled documents always embed.
+Use the alignment buttons in the toolbar to wrap the current block in `<div align="…">` (left / center / right / justify). In Preview mode they align the block under the caret or every block the selection touches. Another alignment **replaces** the wrapper (never nests it), and alignment written inside the block (e.g. `<p style="text-align:left">` from a Word import) is replaced too; **left** removes it. **Justify** works like Word: every line except the last one of a paragraph is stretched — also lines that end in a hard line break (two spaces, `\` or `<br>`) — so a one-line paragraph still looks left-aligned. Paste an image from the clipboard with `Ctrl+V`, or drag an image file onto the editor — it is written to `images/image-001.png` (the next free number) in the folder of the `.md` and a relative link `![…](images/image-001.png)` is inserted. Set `docxmd.pastedImages` to `embed` to keep the old behaviour (a base64 data-URI inside the text); untitled documents always embed.
 
 ### Clean up scientific notation
 
@@ -207,6 +211,17 @@ Translation uses **DeepL** and requires your own API key. On first use you will 
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
+
+## What's new in 0.6.0
+
+Shared with the DOCXMD web app 2.0 (updated `textstyle.js`, `previewedit.js`, `md2docx.js`, `i18n.js`):
+
+- **Alignment always works.** Left / centre / right / justify replace an existing `<div align="…">` instead of wrapping it in another one — before, a second alignment was nested inside the first and had no visible effect, and *left* did nothing after *centre*. Old documents with nested wrappers are fixed by one click. Alignment written inside the block (e.g. `<p style="text-align:left">` from a Word import) is removed so the new one wins; table cells and pictures keep theirs.
+- **Alignment in Preview mode:** the four buttons align the block under the preview caret or every block the selection touches (before they used the hidden source's selection). Clicking another alignment right after the first one works without selecting again.
+- **Justify like Word:** lines that end in a hard line break (two spaces, `\`, `<br>`) are stretched too — in the preview and the HTML export (`MD2DOCX.justifyBreaks`). A one-line paragraph still looks left-aligned, as in Word.
+- **UPPERCASE / lowercase:** new toolbar buttons **AA** / **aa** change the case of the selected text — in the source, the ✎ block editor and Preview mode. Only letters change: Markdown marks, HTML tags, entities and link / image addresses are kept; one `Ctrl+Z` undoes it.
+- **Quick edit and hard line breaks:** text typed at the start of a line that follows a hard line break went to the end of the previous line; it now lands where the caret is (also after `\` and `<br>`, inside `*italic*` etc.). The caret keeps its line after Enter / Tab / Ctrl+B. `Enter` right before or after a hard line break splits the paragraph there and removes the break marker.
+- **Help** opens the updated guide of DOCXMD 2.0 (alignment, case, app updates).
 
 ## What's new in 0.5.0
 

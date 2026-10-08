@@ -173,6 +173,7 @@
     PE.annotateBlocks(preview);
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     enhanceTables(preview);
+    if (window.MD2DOCX && MD2DOCX.justifyBreaks) MD2DOCX.justifyBreaks(preview);   // justified lines ending in a hard break
     if (tableEdit) tableEdit.refresh();
     imgResize.refresh();       // remembers each image's Markdown src first…
     // embedded pictures: #embedded-image-N → an object URL made once per picture
@@ -368,20 +369,29 @@
     ta.focus(); ta.setSelectionRange(s, s);
     replaceSel((s > 0 && v[s - 2] !== "\n" ? "\n" : "") + text + "\n\n");
   }
-  // Alignment: wrap the block in <div align="…"> (toggle off with the active one / left).
-  const ALIGN_WRAP = /^\s*<div align="(left|right|center|justify)">\s*\n([\s\S]*?)\n\s*<\/div>\s*$/;
+  // Alignment: <div align="…"> around the block — DOCXMDTextStyle.alignEdit (media/textstyle.js,
+  // shared with the PWA): an existing wrapper is replaced (never nested), "left" removes it.
+  // In Preview mode the block(s) under the preview selection / caret are aligned (textStyle.align).
   function alignBlock(kind) {
+    if (mode() === "preview" && textStyle && textStyle.align) { textStyle.align(kind); return; }
+    const TS = window.DOCXMDTextStyle; if (!TS || !TS.alignEdit) return;
     const v = ta.value;
-    let s = ta.selectionStart, e = ta.selectionEnd;
-    s = v.lastIndexOf("\n", s - 1) + 1;
-    let le = v.indexOf("\n", e); e = le === -1 ? v.length : le;
-    const block = v.slice(s, e);
-    const m = block.match(ALIGN_WRAP);
-    const existing = m ? m[1] : null;
-    const inner = (m ? m[2] : block).trim();
-    if (!inner) return;
-    const out = (kind === "left" || existing === kind) ? inner : '<div align="' + kind + '">\n\n' + inner + '\n\n</div>';
-    ta.focus(); ta.setSelectionRange(s, e); replaceSel(out);
+    let s = v.lastIndexOf("\n", ta.selectionStart - 1) + 1;
+    let e = v.indexOf("\n", ta.selectionEnd); if (e < 0) e = v.length;
+    if (/^\s*<div\s+align=/i.test(v.slice(s, e))) {
+      // starts at a wrapper: take it up to its own </div>
+      const re = /<(\/?)div\b[^>]*>/gi; re.lastIndex = s;
+      let d = 0, m;
+      while ((m = re.exec(v))) { d += m[1] ? -1 : 1; if (d === 0) { e = Math.max(e, re.lastIndex); break; } }
+    } else {
+      // otherwise the paragraph(s) around it (blank-line bounded)
+      const a = v.lastIndexOf("\n\n", Math.max(0, s - 1)), b = v.indexOf("\n\n", e);
+      s = a < 0 ? 0 : a + 2; e = b < 0 ? v.length : b;
+    }
+    const r = TS.alignEdit(v, s, e, kind);
+    if (!r) return;
+    ta.focus(); ta.setSelectionRange(r.start, r.end); replaceSel(r.text);
+    ta.setSelectionRange(r.selStart, r.selEnd);
   }
   // x² / x₂: wrap in <sup>/<sub>; again → unwrap; the other tag → switch
   function toggleTag(tag) {
@@ -1125,7 +1135,7 @@
   const EXPORT_CSS = "body{font-family:Georgia,serif;max-width:820px;margin:40px auto;padding:0 20px;line-height:1.7;color:#222}" +
     "pre{background:#f5f5f5;padding:1em;border-radius:8px;overflow:auto}code{background:#f0f0f0;padding:.15em .35em;border-radius:4px}" +
     "table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:.4em .7em}.num{text-align:right;font-variant-numeric:tabular-nums}.tbl-full table{width:100%}.tbl-compact th,.tbl-compact td{padding:.15em .45em;font-size:.88em}tbody tr:nth-child(2n) td:not([style]){background:#f7f7f7}.tbl-wrap{overflow-x:auto;margin:0 0 1em}.callout-title{font-weight:700;margin:0 0 .35em}blockquote.callout{color:#222;border-radius:0 8px 8px 0}figure.fig{margin:1em 0;text-align:center}figure.fig img{max-width:100%}figcaption,.tbl-caption{font-size:.92em;color:#444}.tbl-caption{margin:.8em 0 .3em}.fm-card{display:none}mark.hl{color:#000;padding:0 .1em;border-radius:2px}.hl-yellow{background:#fff176}.hl-red{background:#ff8a80}.hl-green{background:#b9f6ca}.hl-blue{background:#80d8ff}.hl-pink{background:#ff80ab}.hl-gray{background:#e0e0e0}nav.toc{border:1px solid #ddd;border-radius:8px;padding:.6em 1em;margin:0 0 1em}nav.toc ul{list-style:none;margin:0;padding:0}.toc-l2{padding-left:1.2em}.toc-l3{padding-left:2.4em}.toc-title{font-weight:700;margin:0 0 .3em}.footnotes{border-top:1px solid #ccc;margin-top:2em;font-size:.9em}.fn-ref a,.fn-back{text-decoration:none}.hnum{color:#666;margin-right:.2em}.xref-missing{color:#c00}blockquote{border-left:4px solid #0984e3;margin:0 0 1em;padding:.3em 1em;color:#555;background:#f7f9fc}img{max-width:100%}" +
-    "math[display=block]{display:block;margin:1em 0;text-align:center}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}";
+    "math[display=block]{display:block;margin:1em 0;text-align:center}.jl{display:block;text-align-last:justify}br.jl-br{display:none}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}";
   function exportHtml() {
     const md = ta.value;
     if (!md.trim()) { vscode.postMessage({ type: "error", text: t("toast.empty") }); return; }
@@ -1137,6 +1147,7 @@
     if (mathStore.length) $$(".katex-ph", tmp).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     if (FOLD) $$("img", tmp).forEach((im) => { const s = im.getAttribute("src"); if (FOLD.isToken(s)) { const d = FOLD.dataOf(IMGS, s); if (d) im.setAttribute("src", d); } });
     enhanceTables(tmp);
+    if (window.MD2DOCX && MD2DOCX.justifyBreaks) MD2DOCX.justifyBreaks(tmp);
     const fm = window.MD2DOCX && MD2DOCX.parseFrontMatter ? MD2DOCX.parseFrontMatter(md) : null;
     const meta = (fm && fm.meta) || {};
     const ms = (k) => (Array.isArray(meta[k]) ? meta[k].join(", ") : meta[k] ? String(meta[k]) : "");
