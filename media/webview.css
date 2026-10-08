@@ -316,6 +316,9 @@ body {
 .markdown-body table[style*="table-layout:fixed"] td, .markdown-body table[style*="table-layout:fixed"] th { overflow-wrap: anywhere; }
 /* Text style (js/textstyle.js): toolbar group + popovers */
 .tb-textstyle { display: contents; }
+/* justified text: a line ending in a hard break is stretched too, as in Word (MD2DOCX.justifyBreaks) */
+.jl { display: block; text-align-last: justify; }
+br.jl-br { display: none; }
 .tbtn .ts-ico, .tb .ts-ico { font-weight: 700; font-size: .95rem; line-height: 1; font-family: Georgia, "Times New Roman", serif; }
 .tbtn .ts-a, .tb .ts-a { position: relative; display: inline-block; padding-bottom: 3px; }
 .tbtn .ts-a i, .tb .ts-a i { position: absolute; left: -2px; right: -2px; bottom: -2px; height: 4px; border-radius: 2px; background: #C00000; }

@@ -16,10 +16,15 @@
      on a span; "off" writes normal, so it also works inside a bold cell or heading.
    A selection across several <span> runs / table cells is styled piece by piece (no tag
    boundary is ever wrapped) and stays selected after the edit.
+   • UPPER / lower case [data-ts="upper|lower"] (Preview): the selected text only — tags and
+     entities inside it are kept.
+   • Alignment [data-ts="alignLeft|alignCenter|alignRight|alignJustify"] (Preview): the
+     block(s) under the selection or caret get <div align="…">; an existing wrapper is
+     replaced (never nested), "left" removes it. alignEdit is exported for the editor buttons.
 
    Exposes: window.DOCXMDTextStyle.attach({ root, source, pe, isPreview, editRange, render,
-     t, toast, lastColor }) -> { close(), apply(), target(), toggle(what) } — root holds the
-     buttons [data-ts="font|size|color|bold|italic"] */
+     t, toast, lastColor }) -> { close(), apply(), target(), toggle(what), setCase(upper), align(kind) }
+     — root holds the buttons [data-ts="font|size|color|bold|italic|upper|lower|align…"] */
 (function (global) {
   "use strict";
   const FONTS = ["Arial", "Book Antiqua", "Calibri", "Cambria", "Candara", "Century Gothic", "Comic Sans MS", "Consolas",
@@ -32,6 +37,73 @@
   const esc = (x) => String(x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const PROP = { font: "font-family", size: "font-size", color: "color" };
   const KEY = { font: "font", size: "font-size" };
+
+  // ---- alignment: <div align="…"> around a block ----
+  const ALIGN_WRAP = /^<div\s+align="(left|right|center|justify)"\s*>\s*([\s\S]*?)\s*<\/div>$/i;
+  // the <div> tags of x are balanced (so a wrapper's </div> really closes its own <div>)
+  function divsBalanced(x) {
+    let d = 0; const re = /<(\/?)div\b[^>]*>/gi; let m;
+    while ((m = re.exec(x))) { d += m[1] ? -1 : 1; if (d < 0) return false; }
+    return d === 0;
+  }
+  // x without the align wrappers around the whole of it (also nested ones) → { inner, cur }
+  function unwrapAlign(x) {
+    let cur = null, m;
+    while ((m = ALIGN_WRAP.exec(x)) && divsBalanced(m[2])) { if (!cur) cur = m[1].toLowerCase(); x = m[2]; }
+    return { inner: x, cur };
+  }
+  // own alignments of the text elements inside an aligned block (Word import writes
+  // <p style="text-align:left">, older edits <div align>) would override the wrapper:
+  // they are removed. Table cells, tables and pictures keep theirs.
+  const TEXT_TAG = /<(p|div|h[1-6]|li|ul|ol|blockquote|section|article|span)\b([^>]*)>/gi;
+  function clearInnerAlign(x) {
+    return x.replace(TEXT_TAG, (m, tag, attrs) => {
+      let a = attrs.replace(/\s+align\s*=\s*(["']?)(left|right|center|justify)\1/gi, "");
+      a = a.replace(/(\s+style\s*=\s*)(["'])([\s\S]*?)\2/i, (mm, pre, q, st) => {
+        const st2 = st.replace(/(^|;)\s*text-align\s*:\s*[a-z-]+\s*(?=;|$)/gi, "$1").replace(/^[\s;]+|[\s;]+$/g, "").replace(/;\s*;/g, ";");
+        return st2 ? pre + q + st2 + q : "";
+      });
+      return a === attrs ? m : "<" + tag + a + ">";
+    });
+  }
+  // Align tx[s, e) (whole blocks): an existing wrapper — around the range, or the range
+  // itself, even nested — is REPLACED, so any alignment can follow any other; "left"
+  // removes it. → edit { start, end, text, selStart, selEnd } | null (nothing to do)
+  function alignEdit(tx, s, e, kind) {
+    while (s < e && /\s/.test(tx[s])) s++;
+    while (e > s && /\s/.test(tx[e - 1])) e--;
+    if (e <= s) return null;
+    let ws = s, we = e;
+    let { inner, cur } = unwrapAlign(tx.slice(s, e));
+    const own = inner;
+    inner = clearInnerAlign(inner);
+    if (!cur) {
+      // the block is the only content of a wrapper around it (✎ block editor, source editor)
+      const mo = /<div\s+align="(left|right|center|justify)"\s*>[ \t]*\n\s*$/i.exec(tx.slice(Math.max(0, s - 64), s));
+      const mc = /^\s*\n[ \t]*<\/div>/i.exec(tx.slice(e, e + 64));
+      if (mo && mc) { ws = s - mo[0].length; we = e + mc[0].length; cur = mo[1].toLowerCase(); }
+    }
+    if (cur) {
+      if (kind === cur && tx.slice(ws, we) === '<div align="' + kind + '">\n\n' + inner + "\n\n</div>") return null;
+      if (kind === "left" && !insideAlign(tx, ws)) return { start: ws, end: we, text: inner, selStart: ws, selEnd: ws + inner.length };
+      const open = '<div align="' + kind + '">\n\n';
+      return { start: ws, end: we, text: open + inner + "\n\n</div>", selStart: ws + open.length, selEnd: ws + open.length + inner.length };
+    }
+    if (kind === "left" && !insideAlign(tx, s)) {          // left is the default
+      return inner === own ? null : { start: s, end: e, text: inner, selStart: s, selEnd: s + inner.length };
+    }
+    const pre = s > 0 && tx[s - 1] !== "\n" ? "\n\n" : (s > 1 && tx[s - 2] !== "\n" ? "\n" : "");
+    const post = e < tx.length && tx[e] !== "\n" ? "\n\n" : (e + 1 < tx.length && tx[e + 1] !== "\n" ? "\n" : "");
+    const open = pre + '<div align="' + kind + '">\n\n';
+    return { start: s, end: e, text: open + inner + "\n\n</div>" + post, selStart: s + open.length, selEnd: s + open.length + inner.length };
+  }
+  // position p lies inside a still-open <div align="…"> (so "left" must be written explicitly)
+  function insideAlign(tx, p) {
+    const before = tx.slice(0, p), re = /<(\/?)div\b([^>]*)>/gi, stack = [];
+    let m;
+    while ((m = re.exec(before))) { if (m[1]) stack.pop(); else stack.push(/\balign\s*=/i.test(m[2])); }
+    return stack.some(Boolean);
+  }
 
   function attach(o) {
     const root = o.root, ta = o.source, PE = o.pe || {};
@@ -189,6 +261,85 @@
       else if (tg.preview && PE.reopenAt) PE.reopenAt(tg.s, tg.e);
     }
 
+    // UPPER / lower case of the selection [data-ts="upper|lower"]: only the visible text
+    // changes — tags (<span …>), entities (&amp;) and link / image destinations ](url "title")
+    // inside the range are kept as they are
+    function recase(x, upper) {
+      return x.replace(/\]\([^()\s]*(?:\([^()\s]*\)[^()\s]*)*(?:\s+(?:"[^"]*"|'[^']*'))?\)|&#?[a-z0-9]+;|<[^<>]*>|[^&<\]]+|[&<\]]/gi, (m) =>
+        (m.length > 1 && (m[0] === "<" || m[0] === "&" || m[0] === "]")) ? m : (upper ? m.toLocaleUpperCase() : m.toLocaleLowerCase()));
+    }
+    function caseSeg(tx, s, e, upper) {
+      const a = tx.slice(s, e), b = recase(a, upper);
+      return a === b ? { noop: true } : { start: s, end: e, text: b, selStart: s, selEnd: s + b.length };
+    }
+    function setCase(upper) {
+      close();
+      const tg = target();
+      if (tg.kind === "unmapped") { toast(t("style.unmapped"), "err"); return; }
+      if (tg.kind === "block") {
+        if (tg.e <= tg.s) { toast(t("style.selectCase"), "err"); return; }
+        PE.applyToBlock((tx, s, e) => { const r = caseSeg(tx, s, e, upper); return r.noop ? null : r; });
+        return;
+      }
+      if (tg.kind !== "src" || tg.e <= tg.s) { toast(t("style.selectCase"), "err"); return; }
+      if (ta.value !== tg.text) { toast(t("style.changed"), "err"); return; }
+      const r = editSegs(ta.value, tg, (tx, s, e) => caseSeg(tx, s, e, upper));
+      if (r) applySrc(r, tg);
+      else if (tg.preview && PE.reopenAt) PE.reopenAt(tg.s, tg.e);
+    }
+
+    // Alignment of the block(s) under the selection / caret [data-ts="alignLeft|…"]:
+    // <div align="…"> around each block (alignEdit, module level — also used by the editor)
+    const ALIGN = { alignLeft: "left", alignCenter: "center", alignRight: "right", alignJustify: "justify" };
+    // the block(s) aligned last: the re-render drops the selection, so the next alignment
+    // button (without a new selection) applies to them again — while the text is unchanged
+    let lastAlign = null;
+    // [s, e) grown to whole paragraphs (blank-line bounded) — for the ✎ block editor
+    function paraRange(tx, s, e) {
+      const a = tx.lastIndexOf("\n\n", Math.max(0, s - 1));
+      const b = tx.indexOf("\n\n", e);
+      return [a < 0 ? 0 : a + 2, b < 0 ? tx.length : b];
+    }
+    function align(kind) {
+      close();
+      const pe = PE.pe || {};
+      if (pe.block && pe.block.ta) {
+        PE.applyToBlock((tx, s, e) => { const p = paraRange(tx, s, e); return alignEdit(tx, p[0], p[1], kind); });
+        return;
+      }
+      // the blocks under the preview selection (or the caret / the open quick edit)
+      const sel = global.getSelection ? global.getSelection() : null;
+      const blockOf = (x) => { const el = x && (x.nodeType === 1 ? x : x.parentElement); const b = el && el.closest && el.closest("[data-b]"); return b && o.previewEl && o.previewEl.contains(b) ? +b.dataset.b : null; };
+      let n0 = pe.quick && pe.quick.c ? blockOf(pe.quick.c) : null, n1 = n0;
+      if (n0 == null && sel && sel.rangeCount) { n0 = blockOf(sel.anchorNode); n1 = blockOf(sel.focusNode); if (n1 == null) n1 = n0; if (n0 == null) n0 = n1; }
+      if (n0 == null && lastAlign && lastAlign.text === ta.value && pe.blocks) {
+        pe.blocks.forEach((b, i) => { if (b.start < lastAlign.e && b.end > lastAlign.s) { if (n0 == null) n0 = i; n1 = i; } });
+      }
+      if (n0 == null || !PE.blockRange) { toast(t("style.selectAlign"), "err"); return; }
+      if (pe.quick) PE.close(true);                       // commit the typed text first (re-renders)
+      // every block on its own (an aligned block is ONE block: its <div align> wrapper is
+      // replaced, never nested), last first so the earlier offsets stay valid; one edit
+      const lo = Math.min(n0, n1), hi = Math.max(n0, n1), text = ta.value;
+      let work = text, selStart = null, selEnd = null;
+      for (let n = hi; n >= lo; n--) {
+        const r = PE.blockRange(n);
+        if (!r || r.type === "frontMatter") { if (lo === hi) { toast(t("style.unmapped"), "err"); return; } continue; }
+        const x = alignEdit(work, r.start, r.end, kind);
+        if (!x) continue;
+        work = work.slice(0, x.start) + x.text + work.slice(x.end);
+        const d = x.text.length - (x.end - x.start);
+        selEnd = selEnd == null ? x.selEnd : selEnd + d;
+        selStart = x.selStart;
+      }
+      if (selStart == null || work === text) return;
+      let p = 0; while (p < text.length && p < work.length && text[p] === work[p]) p++;
+      let sfx = 0; while (sfx < text.length - p && sfx < work.length - p && text[text.length - 1 - sfx] === work[work.length - 1 - sfx]) sfx++;
+      o.editRange(p, text.length - sfx, work.slice(p, work.length - sfx));
+      o.render();
+      lastAlign = { s: selStart, e: selEnd, text: ta.value };
+      try { if (PE.selectSource) PE.selectSource(selStart, selEnd); } catch (x) {}
+    }
+
     function docValue(what) {
       const M = global.MD2DOCX, f = M && M.docFont ? M.docFont(ta.value) : null;
       return f ? (what === "font" ? f.family : f.size) : "";
@@ -258,14 +409,16 @@
       const b = e.target.closest("[data-ts]"); if (!b || !root.contains(b)) return;
       const what = b.dataset.ts;
       if (what === "bold" || what === "italic") { toggle(what); return; }
+      if (what === "upper" || what === "lower") { setCase(what === "upper"); return; }
+      if (ALIGN[what]) { align(ALIGN[what]); return; }
       if (pop && pop.dataset.ts === what) { close(); return; }   // second click closes
       const tg = target();
       // selected text we cannot locate in the source: never fall back to the whole document
       if (tg.kind === "unmapped") { toast(t("style.unmapped"), "err"); return; }
       open(what, b, tg);
     });
-    return { close, apply, target, toggle };
+    return { close, apply, target, toggle, setCase, align };
   }
 
-  global.DOCXMDTextStyle = { attach, FONTS, SIZES, COLORS };
+  global.DOCXMDTextStyle = { attach, alignEdit, FONTS, SIZES, COLORS };
 })(typeof window !== "undefined" ? window : this);

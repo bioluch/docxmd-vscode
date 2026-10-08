@@ -232,19 +232,65 @@
       })(c);
       return found == null ? acc : found;
     }
-    function domPoint(c, t) {
-      let acc = 0, res = null;
+    // Hard line breaks (<br>) have no text of their own, so "end of line 1" and "start of
+    // line 2" are the same text offset. These helpers keep the side of the break:
+    // brOffsets — the text offsets of the container's <br>s (in DOM order);
+    // afterBreak — the DOM point lies right after a <br> (no text between them).
+    function brOffsets(c) {
+      const out = []; let acc = 0;
       (function walk(n) {
         for (const x of n.childNodes) {
-          if (res) return;
-          if (x.nodeType === 3) { const L = x.nodeValue.length; if (acc + L >= t) { res = [x, t - acc]; return; } acc += L; }
+          if (x.nodeType === 3) acc += x.nodeValue.length;
+          else if (x.nodeName === "BR") out.push(acc);
           else if (x.nodeType === 1 && !x.matches(QE_SKIP)) walk(x);
         }
       })(c);
-      return res || [c, c.childNodes.length];
+      return out;
     }
-    function setCaret(c, t0, t1) {
-      const a = domPoint(c, t0), b = domPoint(c, t1 == null ? t0 : t1);
+    function afterBreak(c, node, off) {
+      let br = false, done = false;
+      (function walk(n) {
+        for (let i = 0; i < n.childNodes.length && !done; i++) {
+          const x = n.childNodes[i];
+          if (n === node && i === off) { done = true; return; }
+          if (x === node && x.nodeType === 3) { if (off > 0) br = false; done = true; return; }
+          if (x.nodeType === 3) { if (x.nodeValue.length) br = false; }
+          else if (x.nodeName === "BR") br = true;
+          else if (x.nodeType === 1 && !x.matches(QE_SKIP)) walk(x);
+        }
+        if (n === node) done = true;
+      })(c);
+      return br;
+    }
+    // the editable piece of the source for the text change [a, b) — typing stays in the piece
+    // before the caret, except right after a hard line break: then the piece after it
+    function pickLeaf(Ls, a, b, next) {
+      if (a !== b) return Ls.find((k) => k.t0 <= a && b <= k.t1);
+      return (next && Ls.find((k) => k.t0 <= a && a < k.t1)) ||
+        Ls.find((k) => k.t0 < a && a <= k.t1) || Ls.find((k) => k.t0 <= a && a <= k.t1);
+    }
+    // DOM point of a text offset; next: at a node boundary take the start of the following
+    // text (the line after a <br>) instead of the end of the previous one
+    function domPoint(c, t, next) {
+      let acc = 0, res = null, last = null;
+      (function walk(n) {
+        for (const x of n.childNodes) {
+          if (res) return;
+          if (x.nodeType === 3) {
+            const L = x.nodeValue.length;
+            if (acc + L > t || (acc + L === t && !next)) { res = [x, t - acc]; return; }
+            if (acc + L === t) last = [x, L];
+            acc += L;
+          } else if (x.nodeType === 1 && !x.matches(QE_SKIP)) walk(x);
+        }
+      })(c);
+      return res || last || [c, c.childNodes.length];
+    }
+    // n0 / n1: the start / end lies after a hard line break (see domPoint)
+    function setCaret(c, t0, t1, n0, n1) {
+      if (t1 == null) t1 = t0;
+      if (n1 == null) n1 = t1 === t0 ? n0 : false;
+      const a = domPoint(c, t0, n0), b = domPoint(c, t1, n1);
       const rng = document.createRange(); rng.setStart(a[0], a[1]); rng.setEnd(b[0], b[1]);
       const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng);
     }
@@ -266,7 +312,7 @@
       const roots = els.map((x) => (x.matches(QE_CONTAINERS) ? x.parentElement : x));
       const inBlock = (k) => els.some((x) => x === k || x.contains(k));
       const domConts = () => { const set = new Set(); roots.forEach((rt) => $$(QE_CONTAINERS, rt).forEach((k) => { if (inBlock(k) && qeContainer(k) === k) set.add(k); })); return Array.from(set); };
-      let c = null, text = "", t0 = 0, t1 = 0;
+      let c = null, text = "", t0 = 0, t1 = 0, brNext = false;
       if (map) {
         const same = conts.filter((k) => k.text === map.text), idx = same.indexOf(map);
         const rt = (x) => x.replace(/\s+$/, "");
@@ -276,6 +322,10 @@
         t0 = L.t0 + (s - L.s);
         const L2 = map.leaves.find((x) => within(x, e));
         t1 = L2 ? L2.t0 + (e - L2.s) : t0;
+        // at the start of a piece that follows a hard line break: put the caret on that line
+        const i = map.leaves.indexOf(L);
+        brNext = s === L.s && i > 0 && map.leaves.slice(0, i).some((x) => !x.edit && x.t0 === L.t0) &&
+          /\n|<br\b/i.test(src.slice(map.leaves[i - 1].s, L.s));
       } else {
         // an empty list item or table cell: an editable point right at s
         const ls = src.lastIndexOf("\n", s - 1) + 1, le = src.indexOf("\n", s) < 0 ? src.length : src.indexOf("\n", s);
@@ -300,7 +350,7 @@
       }
       if (!c) return false;
       activateQuick(c, map, text);
-      setCaret(c, t0, t1);
+      setCaret(c, t0, t1, brNext);
       return true;
     }
     function qeKey(e) {
@@ -319,6 +369,8 @@
           // the middle of a paragraph: split it into two
           if (para && collapsed && quickOp((tx, s, en) => {
             const ls = tx.lastIndexOf("\n", s - 1) + 1, le = tx.indexOf("\n", s) < 0 ? tx.length : tx.indexOf("\n", s);
+            const hb = splitAtBreak(tx, s, ls, le);
+            if (hb) return hb;
             if (s === le || s === ls) return null;
             let a = s, b = en;                                    // no blanks left at the split
             while (a > ls && /[ \t]/.test(tx[a - 1])) a--;
@@ -354,6 +406,33 @@
       // a pair character with text selected wraps it: *bold*, ==mark==, `code`, [link]…
       if (!ctrl && !e.altKey && !collapsed && e.key && e.key.length === 1 && /[*_`=~(\["]/.test(e.key)) { handled((tx, s, en) => E.wrapSelection(tx, s, en, e.key)); }
     }
+    // Enter next to a hard line break (two spaces / backslash at the line end, <br>):
+    // the paragraph splits right there and the break marker goes. null: not at a break.
+    const BR_TAG = /<br\s*\/?>/i;
+    function splitAtBreak(tx, s, ls, le) {
+      const split = (a, b) => {
+        while (a > 0 && /[ \t]/.test(tx[a - 1])) a--;
+        while (b < tx.length && /[ \t]/.test(tx[b])) b++;
+        return { start: a, end: b, text: "\n\n", selStart: a + 2, selEnd: a + 2 };
+      };
+      const lineBreakEnd = (line) => / {2,}$|\\$|<br\s*\/?>[ \t]*$/i.test(line);
+      // right after an inline <br> / right before one
+      const pre = /<br\s*\/?>[ \t]*$/i.exec(tx.slice(ls, s));
+      if (pre && s > ls) return split(s - pre[0].length, s);
+      const post = /^[ \t]*<br\s*\/?>/i.exec(tx.slice(s, le));
+      if (post && BR_TAG.test(post[0])) return split(s, s + post[0].length + (s + post[0].length === le && le < tx.length ? 1 : 0));
+      // the start of a line that follows a hard break
+      if (s === ls && ls > 0) {
+        const pls = tx.lastIndexOf("\n", ls - 2) + 1, prev = tx.slice(pls, ls - 1);
+        if (prev.trim() && lineBreakEnd(prev)) {
+          const m = /(?:[ \t]*(?:\\|<br\s*\/?>))?[ \t]*$/i.exec(prev);
+          return split(ls - 1 - m[0].length, s);
+        }
+      }
+      // the end of a line's text, before its hard break
+      if (s > ls && le < tx.length && lineBreakEnd(tx.slice(ls, le)) && /^[ \t]*(?:\\)?[ \t]*$/.test(tx.slice(s, le))) return split(s, le + 1);
+      return null;
+    }
     function qeBlur() { endQuickEdit(true); }
     function qePaste(e) {
       e.preventDefault();
@@ -380,30 +459,29 @@
       return kind === "cell" ? s.replace(/\|/g, "\\|") : s;
     }
     // The typed-but-not-committed change of the quick edit as a source edit
-    function pendingEdit(q, now) {
+    // brs: brOffsets of the container now (tells on which side of a <br> the text was typed)
+    function pendingEdit(q, now, brs) {
       const old = q.old;
       if (now === old) return { none: true };
       let p = 0; while (p < old.length && p < now.length && old[p] === now[p]) p++;
       let sfx = 0; while (sfx < old.length - p && sfx < now.length - p && old[old.length - 1 - sfx] === now[now.length - 1 - sfx]) sfx++;
       const a = p, b = old.length - sfx, ins = now.slice(p, now.length - sfx);
       const Ls = q.map.leaves.filter((L) => L.edit);
-      const L = a === b
-        ? Ls.find((k) => k.t0 < a && a <= k.t1) || Ls.find((k) => k.t0 <= a && a <= k.t1)
-        : Ls.find((k) => k.t0 <= a && b <= k.t1);
+      const L = pickLeaf(Ls, a, b, !!(brs && ins && brs.indexOf(a) >= 0));
       if (!L) return null;
       const kind = L.kind === "code" ? "code" : q.map.kind;
       const esc = mdEscapeTyped(ins, kind);
       return { a, b, ins, kind, start: L.s + (a - L.t0), end: L.s + (b - L.t0), text: esc };
     }
     // text offset in the edited container → source offset (after the pending edit)
-    function mapToSource(q, pend, t) {
+    // next: the point lies right after a hard line break (afterBreak)
+    function mapToSource(q, pend, t, next) {
       const mapOld = (x) => {
-        const Ls = q.map.leaves.filter((L) => L.edit);
-        const L = Ls.find((k) => k.t0 < x && x <= k.t1) || Ls.find((k) => k.t0 <= x && x <= k.t1);
+        const L = pickLeaf(q.map.leaves.filter((k) => k.edit), x, x, next);
         return L ? L.s + (x - L.t0) : null;
       };
-      if (pend.none || t <= pend.a) return mapOld(t);
-      if (t >= pend.a + pend.ins.length) {
+      if (pend.none || t < pend.a || (t === pend.a && (next || !pend.ins))) return mapOld(t);
+      if (t > pend.a + pend.ins.length || (t === pend.a + pend.ins.length && (!pend.ins || next))) {
         const o = mapOld(t - pend.ins.length + (pend.b - pend.a));
         return o == null ? null : o + pend.text.length - (pend.end - pend.start);
       }
@@ -437,11 +515,12 @@
       if (!c.contains(rg.startContainer) && rg.startContainer !== c) return false;
       const now = qeText(c).replace(/\u00A0/g, " ").replace(/\n+$/, "");
       if (getText() !== q.src) { detachQuick(); toast(t("pe.changed"), "err"); renderNow(); return true; }
-      const pend = pendingEdit(q, now);
+      const pend = pendingEdit(q, now, brOffsets(c));
       if (!pend) return false;
       let tS = textOffset(c, rg.startContainer, rg.startOffset), tE = textOffset(c, rg.endContainer, rg.endOffset);
       tS = Math.min(tS, now.length); tE = Math.min(tE, now.length);
-      const sS = mapToSource(q, pend, tS), sE = mapToSource(q, pend, tE);
+      const sS = mapToSource(q, pend, tS, afterBreak(c, rg.startContainer, rg.startOffset)),
+        sE = mapToSource(q, pend, tE, afterBreak(c, rg.endContainer, rg.endOffset));
       if (sS == null || sE == null) return false;
       const src0 = q.src;
       const src1 = pend.none ? src0 : src0.slice(0, pend.start) + pend.text + src0.slice(pend.end);
@@ -475,10 +554,9 @@
       let sfx = 0; while (sfx < old.length - p && sfx < now.length - p && old[old.length - 1 - sfx] === now[now.length - 1 - sfx]) sfx++;
       const a = p, b = old.length - sfx, ins = now.slice(p, now.length - sfx);
       const Ls = q.map.leaves.filter((L) => L.edit);
-      // the whole change must lie inside one plain-text piece of the source
-      const L = a === b
-        ? Ls.find((k) => k.t0 < a && a <= k.t1) || Ls.find((k) => k.t0 <= a && a <= k.t1)   // typing: stay in the piece before the caret
-        : Ls.find((k) => k.t0 <= a && b <= k.t1);
+      // the whole change must lie inside one plain-text piece of the source (typing: the
+      // piece before the caret — after a hard line break the one after it)
+      const L = pickLeaf(Ls, a, b, ins && brOffsets(c).indexOf(a) >= 0);
       if (!L) { toast(t("pe.boundary"), "err"); renderNow(); return; }
       const kind = L.kind === "code" ? "code" : q.map.kind;
       editRange(L.s + (a - L.t0), L.s + (b - L.t0), mdEscapeTyped(ins, kind));
@@ -527,8 +605,9 @@
         if (!ts.unmapped) return ts;
         const c = qeContainer(rg.startContainer);
         const t0 = c ? textOffset(c, rg.startContainer, rg.startOffset) : 0, t1 = c ? textOffset(c, rg.endContainer, rg.endOffset) : 0;
+        const n0 = c ? afterBreak(c, rg.startContainer, rg.startOffset) : false, n1 = c ? afterBreak(c, rg.endContainer, rg.endOffset) : false;
         if (!c || !c.contains(rg.endContainer) || !startQuickEdit(c, -1, -1)) return ts;
-        setCaret(c, t0, t1);
+        setCaret(c, t0, t1, n0, n1);
       }
       // the quick edit: its typed text is committed first (that re-renders the preview)
       let out = null;
