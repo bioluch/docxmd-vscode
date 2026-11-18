@@ -856,6 +856,9 @@
         if (fill) opts.shading = { type: D.ShadingType.CLEAR, fill, color: "auto" };
         else if (header) opts.shading = { type: D.ShadingType.CLEAR, fill: "F0F0F0" };
         if (valign) opts.verticalAlign = valign;
+        // rotated text (imported from Word): writing-mode back to the cell's text direction
+        const wm = String(c.getAttribute("style") || "").match(/writing-mode\s*:\s*([a-z-]+)/gi) || [];
+        if (wm.length && D.TextDirection) opts.textDirection = /sideways-lr/i.test(wm.join(" ")) ? D.TextDirection.BOTTOM_TO_TOP_LEFT_TO_RIGHT : D.TextDirection.TOP_TO_BOTTOM_RIGHT_TO_LEFT;
         if (c.colSpan > 1) opts.columnSpan = c.colSpan;
         if (c.rowSpan > 1) opts.rowSpan = c.rowSpan;
         return new D.TableCell(opts);

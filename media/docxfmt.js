@@ -84,6 +84,9 @@
     if (fill) f.fill = fill;
     const va = VA[wval(kid(tcPr, "vAlign"))];
     if (va) f.valign = va;
+    // rotated text (narrow header columns): btLr = bottom to top, tbRl = top to bottom
+    const td = wval(kid(tcPr, "textDirection"));
+    if (/^(btLr|tbRl|tbRlV|tbLrV)$/.test(td || "")) f.dir = /^btLr$/.test(td) ? "up" : "down";
     // horizontal alignment: first paragraph that has text (a cell with only a
     // picture: the picture's paragraph)
     const paras = ownDescendants(tc, "p");
@@ -263,6 +266,8 @@
     if (f.color) s.push("color:" + f.color);
     if (f.align) s.push("text-align:" + f.align);
     if (f.valign) s.push("vertical-align:" + f.valign);
+    // bottom-to-top: sideways-lr (older browsers keep the vertical-rl before it: top to bottom)
+    if (f.dir) s.push("writing-mode:vertical-rl" + (f.dir === "up" ? ";writing-mode:sideways-lr" : ""));
     return s.join(";");
   }
 
@@ -288,7 +293,7 @@
           const f = cf[ci] || {};
           const st = styleOf(f);
           if (st) cell.setAttribute("style", st);
-          if (f.fill || f.color || f.valign || cell.colSpan > 1 || cell.rowSpan > 1) rich = true;
+          if (f.fill || f.color || f.valign || f.dir || cell.colSpan > 1 || cell.rowSpan > 1) rich = true;
           const a = f.align || "left";
           if (colAlign[ci] === undefined) colAlign[ci] = a;
           else if (colAlign[ci] !== a) rich = true;
@@ -319,11 +324,17 @@
   }
 
   // Pretty, blank-line-free HTML so the whole table stays one Markdown HTML block
+  // the text column of the imported document in px (set by toMarkdown): Word-laid-out tables never get
+  // narrower than they are in Word — on a phone they scroll sideways, and drawings placed over them
+  // (a flowchart across the rows) keep matching the rows and columns
+  let textColPx = 640;
   function tableHtml(table) {
     const cols = (table.getAttribute("data-docxmd-cols") || "").split(",").filter(Boolean);
     const tw = table.getAttribute("data-docxmd-width");
+    const nested = !!(table.parentElement && table.parentElement.closest && table.parentElement.closest("td,th"));
     // Word's column widths: a fixed layout, so pictures shrink to their column
     const st = cols.length ? ["width:" + (tw || 100) + "%", "table-layout:fixed"] : [];
+    if (cols.length && !nested) st.push("min-width:" + Math.round(textColPx * Math.min(100, +tw || 100) / 100) + "px");
     if (getCss(table, "font-size")) st.push("font-size:" + getCss(table, "font-size"));
     const jc = table.getAttribute("data-docxmd-jc");
     if (jc) { if (!cols.length) st.push("width:" + (tw && +tw < 100 ? tw : 80) + "%"); st.push("margin-left:auto"); if (jc === "center") st.push("margin-right:auto"); }
@@ -339,6 +350,11 @@
       x.querySelectorAll("[data-docxmd-sec]").forEach((e) => { e.id = "sec:" + e.getAttribute("data-docxmd-sec"); e.removeAttribute("data-docxmd-sec"); });
       x.querySelectorAll('a[id^="sec_"]:not([href])').forEach((a) => { const p = a.parentElement; if (p && p !== x && !p.id) p.id = "sec:" + unBookmark(a.id, "sec"); });
       x.querySelectorAll("a[id]:not([href])").forEach((a) => { if (!a.textContent && !a.children.length) a.remove(); });
+      // a table nested in the cell: the same clean HTML (widths, colours) instead of its internal markers
+      Array.from(x.querySelectorAll("table")).reverse().forEach((nt) => {
+        const tmp = document.createElement("div"); tmp.innerHTML = tableHtml(nt);
+        if (tmp.firstElementChild) nt.replaceWith(tmp.firstElementChild);
+      });
       return x.innerHTML.replace(/\s*\n\s*/g, " ").trim();
     };
     const sections = Array.from(table.children).filter((n) => /^(THEAD|TBODY|TFOOT)$/.test(n.nodeName));
@@ -639,6 +655,19 @@
     String(docXml || "").replace(/<w:sz w:val="(\d+)"/g, (x, v) => { sizes.add(+v / 2); return x; });
     sizes.forEach((pt) => res.styleMap.push("r[style-name='" + sizeClass(pt) + "'] => span." + sizeClass(pt)));
     ["center", "right"].forEach((a) => res.styleMap.push("p[style-name='docxmd-align-" + a + "'] => p.docxmd-align-" + a + ":fresh"));
+    // paragraph indents (left / first line / hanging, twips → px in steps of 2): forms in table cells put a
+    // check box into the first-line indent — without it the text runs under the box. The style map is
+    // fixed before the conversion, so every indent the document uses gets its entry here.
+    const indKey = (start, first, hang) => {
+      const L = Math.round((+start || 0) / 30) * 2, F = Math.round(((+first || 0) - (+hang || 0)) / 30) * 2;
+      return L || F ? "l" + L + "f" + String(F).replace("-", "m") : "";
+    };
+    const inds = new Set();
+    String(docXml || "").replace(/<w:ind\b([^>]*)\/?>/g, (x, a) => {
+      const g = (n) => (new RegExp("w:" + n + '="(-?\\d+)"').exec(a) || [])[1];
+      const k = indKey(g("left") || g("start"), g("firstLine"), g("hanging")); if (k) inds.add(k); return x;
+    });
+    inds.forEach((k) => ["", "center", "right"].forEach((a) => res.styleMap.push("p[style-name='docxmd-p-" + (a || "left") + "-" + k + "'] => p" + (a ? ".docxmd-align-" + a : "") + ".docxmd-ind-" + k + ":fresh")));
     const chars = (r) => (r.children || []).reduce((n, c) => n + (c.type === "text" ? String(c.value || "").replace(/\s/g, "").length : 0), 0);
     const isHead = (p) => HEAD_STYLE.test(p.styleName || "");
     res.transformDocument = (doc) => {
@@ -662,7 +691,12 @@
           if (k === res.docSize || !chars(r) || (r.styleName && keep.has(r.styleName)) || !sizes.has(k)) return r;
           return Object.assign({}, r, { styleName: sizeClass(k) });
         })(q);
-        if (!q.styleName && (q.alignment === "center" || q.alignment === "right")) q = Object.assign({}, q, { styleName: "docxmd-align-" + q.alignment });
+        // a paragraph with an ordinary style ("31", "Normal (Web)" …) gets its indent too; headings, quotes and
+        // code keep their own style (they are mapped to Markdown blocks)
+        const plainStyle = !q.styleName || (!isHead(q) && !/quote|code|source|verbatim|caption|title|toc/i.test(q.styleName));
+        const ik = plainStyle && q.indent ? indKey(q.indent.start, q.indent.firstLine, q.indent.hanging) : "";
+        if (ik && inds.has(ik)) q = Object.assign({}, q, { styleName: "docxmd-p-" + (q.alignment === "center" || q.alignment === "right" ? q.alignment : "left") + "-" + ik });
+        else if (!q.styleName && (q.alignment === "center" || q.alignment === "right")) q = Object.assign({}, q, { styleName: "docxmd-align-" + q.alignment });
         return q;
       })(doc);
     };
@@ -735,13 +769,34 @@
       if (table && table.hasAttribute("data-docxmd-quote")) return; // becomes a blockquote
       const cell = p.parentNode, html = table && table.hasAttribute("data-docxmd-html");
       const al = alignOf(p), cellAl = getCss(cell, "text-align") || "left";
+      // a paragraph without text keeps its line (also one that only anchors a floating picture)
+      const keepLine = (d) => { if (!d.textContent.trim() && !d.querySelector("img:not([style*='absolute']), table")) d.appendChild(document.createTextNode("\u00a0")); };
       if (html && al && al !== cellAl) {
         const d = document.createElement("div"); setCss(d, "text-align", al);
         while (p.firstChild) d.appendChild(p.firstChild);
+        keepLine(d);
         p.replaceWith(d);
         return;
       }
-      if (p.previousElementSibling && p.previousElementSibling.nodeName !== "DIV") cell.insertBefore(html ? document.createElement("br") : document.createTextNode(" "), p);
+      // HTML table: each Word paragraph stays a block of its own (no "ЗАТВЕРДЖУЮДиректор", and a
+      // justified paragraph does not stretch its last line); an empty one keeps its blank line
+      if (html) {
+        const d = document.createElement("div");
+        if (al && al !== cellAl) setCss(d, "text-align", al);
+        const im = /\bdocxmd-ind-l(\d+)f(m?)(\d+)\b/.exec(p.className || "");
+        if (im) { if (+im[1]) setCss(d, "padding-left", im[1] + "px"); if (+im[3]) setCss(d, "text-indent", (im[2] ? "-" : "") + im[3] + "px"); }
+        // runs of spaces typed in Word to line text up (a form line after its check box) keep their width
+        const tw = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        for (let tn = tw.nextNode(); tn; tn = tw.nextNode()) if (/ {2,}/.test(tn.data)) tn.data = tn.data.replace(/ {2,}/g, (m) => "\u00a0".repeat(m.length - 1) + " ");
+        while (p.firstChild) d.appendChild(p.firstChild);
+        keepLine(d);
+        p.replaceWith(d);
+        return;
+      }
+      // a pipe table: one line — a space between paragraphs whenever text or a picture came before
+      let before = false;
+      for (let n = p.previousSibling; n; n = n.previousSibling) { if ((n.nodeType === 3 && n.textContent.trim()) || (n.nodeType === 1 && n.nodeName !== "DIV")) { before = true; break; } if (n.nodeType === 1) break; }
+      if (before) cell.insertBefore(document.createTextNode(" "), p);
       while (p.firstChild) cell.insertBefore(p.firstChild, p);
       p.remove();
     });
@@ -755,12 +810,17 @@
       const d = document.createElement("div"); d.setAttribute("data-docxmd-align", al);
       p.replaceWith(d); d.appendChild(p);
     });
-    tpl.content.querySelectorAll('p[class*="docxmd-align-"]').forEach((p) => { p.className = p.className.replace(/\s*docxmd-align-\w+/g, "").trim(); if (!p.className) p.removeAttribute("class"); });
+    tpl.content.querySelectorAll('p[class*="docxmd-align-"], p[class*="docxmd-ind-"]').forEach((p) => { p.className = p.className.replace(/\s*docxmd-(?:align|ind)-[\w-]+/g, "").trim(); if (!p.className) p.removeAttribute("class"); });
     return tpl.innerHTML;
   }
   // Turndown: aligned groups → <div align="…"> around Markdown; sized / coloured /
   // font spans stay inline HTML around their (Markdown) content.
   function formatRules(td) {
+    // floating pictures (js/docxdraw.js): their box / float stays inline HTML
+    td.addRule("docxmdFloat", {
+      filter: (n) => (n.nodeName === "SPAN" && n.hasAttribute("data-docxmd-float")) || (n.nodeName === "IMG" && /float:|display:block/.test(n.getAttribute("style") || "") && !n.closest("[data-docxmd-float]")),
+      replacement: (content, node) => node.outerHTML
+    });
     td.addRule("docxmdAlign", {
       filter: (n) => n.nodeName === "DIV" && n.hasAttribute("data-docxmd-align"),
       replacement: (content, node) => '\n\n<div align="' + node.getAttribute("data-docxmd-align") + '">\n\n' + content.replace(/^\n+|\n+$/g, "") + "\n\n</div>\n\n"
@@ -783,14 +843,28 @@
     if (global.DOCXMDCite && global.DOCXMDCite.importPrepare) {
       try { cites = await global.DOCXMDCite.importPrepare(ab); if (cites && cites.ab) ab = cites.ab; } catch (e) { console.warn("DOCXFMT citations", e); cites = null; }
     }
+    // shapes / flowcharts → SVG pictures (markers), floating pictures → their position (js/docxdraw.js)
+    let drawn = null;
+    if (global.DOCXMDDraw) {
+      try { drawn = await global.DOCXMDDraw.prepare(ab); if (drawn && drawn.ab) ab = drawn.ab; } catch (e) { console.warn("DOCXFMT drawings", e); drawn = null; }
+    }
     const [docXml, stylesXml] = await Promise.all([readZipEntry(ab, "word/document.xml"), readZipEntry(ab, "word/styles.xml")]);
+    // the text column (last section: page width minus margins, twips → px)
+    try {
+      const sp = /<w:sectPr\b[\s\S]*<w:pgSz\b[^>]*w:w="(\d+)"[\s\S]*?<w:pgMar\b([^>]*)>/.exec(docXml || "");
+      if (sp) { const L = +((/w:left="(\d+)"/.exec(sp[2]) || [])[1] || 1440), R = +((/w:right="(\d+)"/.exec(sp[2]) || [])[1] || 1440); textColPx = Math.max(300, Math.round((+sp[1] - L - R) / 15)); }
+    } catch (e) { textColPx = 640; }
     const styleMap = ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
       .concat(highlightStyleMap(), codeStyleMap());
     const keep = new Set(styleMap.map((x) => (/^r\[style-name='([^']+)'\]/.exec(x) || [])[1]).filter(Boolean));
     let fa = { styleMap: [], transformDocument: null, docSize: null };
     try { fa = sizeAlignImport(docXml, baseSize(stylesXml), keep); } catch (e) { console.warn("DOCXFMT sizes", e); }
-    const opts = { styleMap: styleMap.concat(fa.styleMap) };
+    // empty Word paragraphs are kept: in a table cell they give the row its height (a signature
+    // block with a stamp over it); in the body Turndown drops them anyway
+    const opts = { styleMap: styleMap.concat(fa.styleMap), ignoreEmptyParagraphs: false };
     if (fa.transformDocument) opts.transformDocument = fa.transformDocument;
+    // EMF / WMF pictures → SVG in the browser (js/docxdraw.js + js/vendor/emfjs)
+    if (global.DOCXMDDraw && global.DOCXMDDraw.mammothImages && M.images && M.images.imgElement) opts.convertImage = global.DOCXMDDraw.mammothImages(M);
     const result = await M.convertToHtml({ arrayBuffer: ab }, opts);
     const td = new global.TurndownService({
       headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-",
@@ -803,10 +877,12 @@
     tableRule(td);
     // mammoth ignores table colours / alignment / widths: read them from the XML ourselves
     let html = apply(result.value || "", await extract(ab));
+    if (global.DOCXMDDraw) html = global.DOCXMDDraw.finishHtml(html, drawn ? drawn.shapes : null);
     // pictures that carry a Mermaid diagram (alt text "mermaid:…", written by DOCXMD) → the diagram source
     const MMD = global.DOCXMDMermaid, mmd = MMD ? MMD.importHtml(html) : null;
     if (mmd) html = mmd.html;
     let md = td.turndown(cleanHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    if (drawn && drawn.shapes.length) md = global.DOCXMDDraw.finishMd(md, drawn.shapes);
     if (mmd && mmd.blocks.length) md = MMD.importMd(md, mmd.blocks).replace(/\n{3,}/g, "\n\n");
     let citeMeta = null;
     if (cites) { const r = global.DOCXMDCite.importFinish(md, cites); md = r.md; citeMeta = r.meta; }

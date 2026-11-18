@@ -550,6 +550,8 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "highlight.min.js")}"></script>
   <script src="${v("vendor", "docx.umd.js")}"></script>
   <script src="${v("docxzip.js")}"></script>
+  <script src="${v("emfsvg.js")}"></script>
+  <script src="${v("docxdraw.js")}"></script>
   <script src="${v("mml2omml.js")}"></script>
   <script src="${v("mermaidx.js")}"></script>
   <script src="${v("cite.js")}"></script>
