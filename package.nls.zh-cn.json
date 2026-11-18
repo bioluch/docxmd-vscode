@@ -6,5 +6,6 @@
   "cmd.exportHtml": "导出为 HTML",
   "cmd.importDocx": "将 Word (.docx) 导入为 Markdown",
   "cmd.setDeeplKey": "设置 DeepL API 密钥",
-  "cmd.cleanNotation": "清理科学记数法"
+  "cmd.cleanNotation": "清理科学记数法",
+  "cmd.pasteFromAI": "从 AI 粘贴（ChatGPT、Claude、Gemini…）"
 }

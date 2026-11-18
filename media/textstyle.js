@@ -56,7 +56,44 @@
   // <p style="text-align:left">, older edits <div align>) would override the wrapper:
   // they are removed. Table cells, tables and pictures keep theirs.
   const TEXT_TAG = /<(p|div|h[1-6]|li|ul|ol|blockquote|section|article|span)\b([^>]*)>/gi;
+  // Parts of the text that are never rewritten: fenced code, `code spans`, LaTeX math
+  const FENCE_RE = /(^|\n)[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n[ \t]{0,3}\2[`~]*[ \t]*(?=\n|$)|$)/g;
+  const CODESPAN_RE = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g;
+  const MATH_RE = /\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|(?<![\\$])\$(?!\s)[^$\n]+?(?<![\s\\])\$(?!\d)/g;
+  // fn applied only to the pieces of x outside the ranges matched by res
+  function outsideRanges(x, res, fn) {
+    const rs = [];
+    for (const re of res) { re.lastIndex = 0; let m; while ((m = re.exec(x))) { if (!m[0].length) { re.lastIndex++; continue; } rs.push([m.index, m.index + m[0].length]); } }
+    if (!rs.length) return fn(x);
+    rs.sort((a, b) => a[0] - b[0]);
+    let out = "", pos = 0;
+    for (const [a, b] of rs) { if (b <= pos) continue; if (a > pos) out += fn(x.slice(pos, a)); out += x.slice(Math.max(a, pos), b); pos = b; }
+    return out + (pos < x.length ? fn(x.slice(pos)) : "");
+  }
+  // the protected ranges of a whole text (cached for the last text: one case change edits many pieces)
+  let protTx = null, protRs = null;
+  function protectedRanges(tx) {
+    if (tx === protTx) return protRs;
+    const rs = [];
+    for (const re of [FENCE_RE, CODESPAN_RE, MATH_RE]) { re.lastIndex = 0; let m; while ((m = re.exec(tx))) { if (!m[0].length) { re.lastIndex++; continue; } rs.push([m.index, m.index + m[0].length]); } }
+    rs.sort((a, b) => a[0] - b[0]);
+    protTx = tx; protRs = rs;
+    return rs;
+  }
+  // fn on the parts of tx[s, e) outside code / math of the WHOLE text (a piece may be just "code" of `code`)
+  function outsideWithin(tx, s, e, fn) {
+    let out = "", pos = s;
+    for (const [a, b] of protectedRanges(tx)) {
+      if (b <= pos || a >= e) continue;
+      if (a > pos) out += fn(tx.slice(pos, a));
+      const end = Math.min(b, e); out += tx.slice(Math.max(a, pos), end); pos = end;
+    }
+    return out + (pos < e ? fn(tx.slice(pos, e)) : "");
+  }
   function clearInnerAlign(x) {
+    return outsideRanges(x, [FENCE_RE, CODESPAN_RE], (seg) => clearAlignTags(seg));
+  }
+  function clearAlignTags(x) {
     return x.replace(TEXT_TAG, (m, tag, attrs) => {
       let a = attrs.replace(/\s+align\s*=\s*(["']?)(left|right|center|justify)\1/gi, "");
       a = a.replace(/(\s+style\s*=\s*)(["'])([\s\S]*?)\2/i, (mm, pre, q, st) => {
@@ -263,13 +300,20 @@
 
     // UPPER / lower case of the selection [data-ts="upper|lower"]: only the visible text
     // changes — tags (<span …>), entities (&amp;) and link / image destinations ](url "title")
-    // inside the range are kept as they are
-    function recase(x, upper) {
+    // inside the range are kept as they are; so are case-sensitive keys: bare URLs, [^footnote]
+    // labels, @citation / @fig:id cross-reference keys and {#id} / {key=value} attributes
+    const KEEP_CASE = /(?:https?|ftp|mailto):[^\s<>()\]]+|\bwww\.[^\s<>()\]]+|\[\^[^\]\s]+\]|@[A-Za-z0-9_][\w:.#$%&+?~\/-]*|\{[#.:][^{}\n]*\}|\{[^{}\n]*=[^{}\n]*\}/g;
+    function recaseText(x, upper) {
+      const kept = [];
+      x = x.replace(/[\uE000\uE001]/g, "").replace(KEEP_CASE, (m) => "\uE000" + (kept.push(m) - 1) + "\uE001");
+      return recaseRest(x, upper).replace(/\uE000(\d+)\uE001/g, (m, i) => kept[+i]);
+    }
+    function recaseRest(x, upper) {
       return x.replace(/\]\([^()\s]*(?:\([^()\s]*\)[^()\s]*)*(?:\s+(?:"[^"]*"|'[^']*'))?\)|&#?[a-z0-9]+;|<[^<>]*>|[^&<\]]+|[&<\]]/gi, (m) =>
         (m.length > 1 && (m[0] === "<" || m[0] === "&" || m[0] === "]")) ? m : (upper ? m.toLocaleUpperCase() : m.toLocaleLowerCase()));
     }
     function caseSeg(tx, s, e, upper) {
-      const a = tx.slice(s, e), b = recase(a, upper);
+      const a = tx.slice(s, e), b = outsideWithin(tx, s, e, (seg) => recaseText(seg, upper));
       return a === b ? { noop: true } : { start: s, end: e, text: b, selStart: s, selEnd: s + b.length };
     }
     function setCase(upper) {

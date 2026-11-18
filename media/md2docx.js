@@ -9,7 +9,7 @@
   function ready() { return global.marked && global.docx; }
 
   // Cap image display width to typical content width (~6.3in @96dpi)
-  const MAX_IMG_W = 600;
+  const MAX_IMG_W = 600; const MAX_DIAG_H = 860;   // px: the text height of an A4 page
 
   // ---- Image pre-fetch ---------------------------------------------------
   async function blobToInfo(blob, src) {
@@ -90,7 +90,7 @@
     return st ? st[1] : a ? a[1] : "";
   }
   // Word size (px) of an image for a width value; no width → natural size
-  function sizeFor(info, width, maxW) {
+  function sizeFor(info, width, maxW, maxH) {
     let w = info.width, h = info.height;
     const m = /^([\d.]+)(%|px|cm|mm|in)?$/.exec(String(width || "").trim());
     if (m && +m[1] > 0) {
@@ -99,10 +99,33 @@
     }
     // inside a table cell: never wider than the column
     if (maxW && w > maxW) { h = Math.round(h * maxW / w); w = Math.round(maxW); }
+    // diagrams: a requested width never makes them taller than a page
+    if (maxH && h > maxH) { w = Math.round(w * maxH / h); h = Math.round(maxH); }
     return { width: Math.max(1, w), height: Math.max(1, h) };
   }
-  function imageRun(info, width, D, maxW) {
-    return new D.ImageRun({ data: info.data, type: info.type, transformation: sizeFor(info, width, maxW) });
+  function imageRun(info, width, D, maxW, altText, maxH) {
+    const o = { data: info.data, type: info.type, transformation: sizeFor(info, width, maxW, maxH) };
+    if (altText) o.altText = altText;
+    return new D.ImageRun(o);
+  }
+  // ---- Mermaid diagrams (js/mermaidx.js, optional) ----
+  const MMD = () => global.DOCXMDMermaid || null;
+  const MERMAID_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*mermaid\b([^\n`]*)\n([\s\S]*?)(?:\n {0,3}\1[`~]*[ \t]*(?:\n+|$)|$)/;
+  // picture + caption paragraphs (or the source as a code block when it could not be drawn)
+  function mermaidParas(tk, ctx) {
+    const D = ctx.D, out = [];
+    const vk = tk.key + (tk.rotate ? "r" + tk.rotate : "");
+    const info = ctx.imgMap && ctx.imgMap.get("mermaid:" + vk);
+    if (!info) { out.push(codeBlock({ type: "code", lang: "mermaid", text: tk.text }, D, 0)); return out; }
+    const alt = { name: "mermaid-" + vk, title: tk.caption || "Mermaid", description: MMD().encodeAlt(tk.text, { id: tk.id || undefined, caption: tk.caption || undefined, width: tk.width || undefined, align: tk.align || undefined, rotate: tk.rotate || undefined }) };
+    const AL = tk.align === "left" ? D.AlignmentType.LEFT : tk.align === "right" ? D.AlignmentType.RIGHT : D.AlignmentType.CENTER;
+    out.push(new D.Paragraph({ children: [imageRun(info, tk.width, D, undefined, alt, MAX_DIAG_H)], alignment: AL, keepNext: !!(tk.id || tk.caption), spacing: { before: 120, after: 60 } }));
+    if (tk.id) {
+      const cap = [new D.Bookmark({ id: bookmarkName("fig", tk.id), children: [new D.TextRun({ text: word("fig") + " " + (DOC.figs[tk.id] || "?"), bold: true })] })];
+      if (tk.caption) cap.push(new D.TextRun(" — "), ...inlineRuns(tk.captionTokens, {}, ctx.imgMap, D));
+      out.push(new D.Paragraph({ children: cap, alignment: AL, spacing: { after: 200 } }));
+    } else if (tk.caption) out.push(new D.Paragraph({ children: inlineRuns(tk.captionTokens, { italics: true }, ctx.imgMap, D), alignment: AL, spacing: { after: 200 } }));
+    return out;
   }
   function parseHtmlFragment(raw) {
     if (typeof global.DOMParser === "undefined") return null;
@@ -188,9 +211,19 @@
   // ---- Inline runs -------------------------------------------------------
   // ---- LaTeX → OMML (native Word math) ----------------------------------
   const GREEK = { alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ", vartheta: "ϑ", iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", upsilon: "υ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ", omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω" };
-  const MOPS = { cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", approx: "≈", neq: "≠", ne: "≠", leq: "≤", le: "≤", geq: "≥", ge: "≥", ll: "≪", gg: "≫", rightarrow: "→", to: "→", leftarrow: "←", infty: "∞", ldots: "…", cdots: "⋯", dots: "…", equiv: "≡", sim: "∼", propto: "∝", partial: "∂", nabla: "∇", sum: "∑", prod: "∏", int: "∫", in: "∈", notin: "∉", cup: "∪", cap: "∩", forall: "∀", exists: "∃", leftrightarrow: "↔", Rightarrow: "⇒", Leftrightarrow: "⇔", uparrow: "↑", downarrow: "↓", subset: "⊂", circ: "°", varphi: "φ" };
+  const MOPS = { cdot: "·", times: "×", div: "÷", pm: "±", mp: "∓", approx: "≈", neq: "≠", ne: "≠", leq: "≤", le: "≤", geq: "≥", ge: "≥", ll: "≪", gg: "≫", rightarrow: "→", to: "→", vert: "|", lvert: "|", rvert: "|", Vert: "‖", mid: "∣", leftarrow: "←", infty: "∞", ldots: "…", cdots: "⋯", dots: "…", equiv: "≡", sim: "∼", propto: "∝", partial: "∂", nabla: "∇", sum: "∑", prod: "∏", int: "∫", in: "∈", notin: "∉", cup: "∪", cap: "∩", forall: "∀", exists: "∃", leftrightarrow: "↔", Rightarrow: "⇒", Leftrightarrow: "⇔", uparrow: "↑", downarrow: "↓", subset: "⊂", circ: "°", varphi: "φ" };
 
-  function mathToOmml(D, tex) {
+  // Exact equations: KaTeX MathML → OMML (js/mml2omml.js); front matter `math: basic`
+  // (or a missing KaTeX) keeps the older built-in LaTeX parser below.
+  function mathToOmml(D, tex, display) {
+    const O = global.DOCXMDOmml;
+    const basic = DOC.meta && /^(?:basic|compat|simple)$/i.test(String(DOC.meta.math || ""));
+    if (O && !basic && D.ImportedXmlComponent) {
+      const xml = O.fromTex(String(tex), !!display);
+      if (xml) {
+        try { const root = D.ImportedXmlComponent.fromXmlString(xml); const m = root && root.root && root.root[0]; if (m) return m; } catch (e) {}
+      }
+    }
     try { return new D.Math({ children: parseTex(D, String(tex)) }); }
     catch (e) { return new D.Math({ children: [new D.MathRun(String(tex))] }); }
   }
@@ -233,6 +266,42 @@
     }
     flushRest();
     return out.length ? out : [new D.MathRun("")];
+  }
+
+  // Zotero mode (front matter `zotero: true` or opts.zotero): citations / bibliography as Zotero fields
+  let ZOT_MODE = false;
+  const xmlRuns = (list, D) => list.map((x) => { const r = D.ImportedXmlComponent.fromXmlString(x); return r && r.root && r.root[0]; }).filter(Boolean);
+  // citeproc HTML (<i>, <b>, <sup>, small caps …) → Word runs
+  function citeRuns(html, style, D) {
+    return CITE().htmlSegments(html).map((g) => g.text === "\n" ? new D.TextRun({ text: "", break: 1 }) : new D.TextRun({
+      text: g.text, bold: style.bold || g.b || undefined, italics: style.italics ? !g.i : g.i || undefined, superScript: g.sup || style.superScript || undefined,
+      subScript: g.sub || style.subScript || undefined, smallCaps: g.sc || undefined, underline: g.u ? {} : undefined, color: style.color, font: style.font, size: style.size
+    }));
+  }
+  // the bibliography: one "Bibliography" paragraph per entry, numeric styles with a tab after [n]
+  function bibParagraphs(tk, D) {
+    const L = CITE() && CITE().last();
+    if (!L || !L.rec || !L.res.entries.length) return [];
+    const out = [];
+    if (tk.auto) out.push(new D.Paragraph({ heading: D.HeadingLevel.HEADING_2, children: [new D.TextRun(L.title)], spacing: { before: 240, after: 80 } }));
+    const hang = L.res.params && L.res.params.hangingindent;
+    const last = L.res.entries.length - 1;
+    L.res.entries.forEach((e, i) => {
+      const p = CITE().entryParts(e.html);
+      const runs = [];
+      const pre = ZOT_MODE && i === 0 ? xmlRuns(CITE().fieldXml("begin", CITE().ZOTERO_BIBL), D) : [];
+      const post = ZOT_MODE && i === last ? xmlRuns(CITE().fieldXml("end"), D) : [];
+      if (p.left) runs.push(...citeRuns(p.left, {}, D), new D.TextRun({ children: [new D.Tab()] }));
+      runs.push(...citeRuns(p.body, {}, D));
+      out.push(new D.Paragraph({
+        style: "Bibliography",
+        children: pre.concat([new D.Bookmark({ id: refBookmark(e.id), children: runs })], post),
+        indent: p.left ? { left: 567, hanging: 567 } : hang ? { left: 720, hanging: 720 } : undefined,
+        tabStops: p.left ? [{ type: D.TabStopType.LEFT, position: 567 }] : undefined,
+        spacing: { after: 100 }
+      }));
+    });
+    return out;
   }
 
   function inlineRuns(tokens, style, imgMap, D) {
@@ -284,10 +353,28 @@
           break;
         }
         case "mathInline":
-          runs.push(mathToOmml(D, tk.text)); break;
+          runs.push(mathToOmml(D, tk.text, !!tk.display)); break;
         case "footnoteRef": {
           const n = DOC.fnNum[tk.id];
           runs.push(n ? new D.FootnoteReferenceRun(n) : mkRun(tk.raw, style, D));
+          break;
+        }
+        case "citation": {
+          const o = tk._out, L = CITE() && CITE().last();
+          if (!o) { runs.push(mkRun(tk.raw, tk.narrative ? style : Object.assign({}, style, { color: "C00000" }), D)); break; }
+          const kids = citeRuns(o.html, style, D);
+          if (ZOT_MODE && tk.narrative && o.who) {
+            const c1 = CITE().zoteroCitationCode(tk, "author"), c2 = CITE().zoteroCitationCode(tk, "rest");
+            if (c1 && c2) {
+              runs.push(...xmlRuns(CITE().fieldXml("begin", c1), D), ...citeRuns(o.who, style, D), ...xmlRuns(CITE().fieldXml("end"), D), mkRun(" ", style, D),
+                ...xmlRuns(CITE().fieldXml("begin", c2), D), ...citeRuns(o.cluster, style, D), ...xmlRuns(CITE().fieldXml("end"), D));
+              break;
+            }
+          }
+          const code = ZOT_MODE ? CITE().zoteroCitationCode(tk) : null;
+          if (code) { runs.push(...xmlRuns(CITE().fieldXml("begin", code), D), ...kids, ...xmlRuns(CITE().fieldXml("end"), D)); break; }
+          if (L && L.links && o.ids.length) runs.push(new D.InternalHyperlink({ anchor: refBookmark(o.ids[0]), children: kids }));
+          else runs.push(...kids);
           break;
         }
         case "crossRef": {
@@ -392,8 +479,8 @@
         else if (child.type === "text" || child.type === "paragraph") {
           lead.push(...inlineRuns(child.tokens || [{ type: "text", text: child.text }], ctx.baseStyle || {}, ctx.imgMap, D));
         } else if (child.type === "space") { /* ignore */ }
-        else if (child.type === "code") {
-          nested.push(child); // handle code blocks after lead
+        else if (child.type === "code" || child.type === "mermaid") {
+          nested.push(child); // handle code blocks / diagrams after lead
         } else {
           lead.push(...inlineRuns(child.tokens || [], ctx.baseStyle || {}, ctx.imgMap, D));
         }
@@ -418,6 +505,8 @@
           buildList(n, level + 1, olInstance, ctx, out);
         } else if (n.type === "code") {
           out.push(codeBlock(n, D, 360 * (level + 1)));
+        } else if (n.type === "mermaid") {
+          out.push(...mermaidParas(n, ctx));    // picture (or its source when it could not be drawn)
         }
       }
     }
@@ -510,7 +599,8 @@
           if (b.ordered) ctx.ol++;
           buildList(b, 0, ctx.ol, qctx, kids); break;
         case "code": kids.push(codeBlock(b, D, 0)); break;
-        case "mathBlock": para([mathToOmml(D, b.text)], { alignment: D.AlignmentType.CENTER }); break;
+        case "mermaid": kids.push(...mermaidParas(b, ctx)); break;
+        case "mathBlock": para([mathToOmml(D, b.text, true)], { alignment: D.AlignmentType.CENTER }); break;
         case "table": kids.push(buildTable(b, ctx)); break;
         case "blockquote": kids.push(buildQuote(b, ctx)); break;
         case "colorBox": kids.push(buildQuote({ tokens: unwrapQuotes(b.tokens) }, ctx, b.color, b)); break;
@@ -827,13 +917,13 @@
   // Callout types (info / note / tip / success / important / warning / danger).
   // Colours are fixed so preview, print, HTML and DOCX look the same in every theme.
   const CALLOUTS = {
-    info:      { color: "1E88E5", icon: "ℹ️", title: { en: "Info", uk: "Інформація", es: "Información", zh: "信息" } },
-    note:      { color: "78909C", icon: "📝", title: { en: "Note", uk: "Примітка", es: "Nota", zh: "注" } },
-    tip:       { color: "00897B", icon: "💡", title: { en: "Tip", uk: "Порада", es: "Consejo", zh: "提示" } },
-    success:   { color: "43A047", icon: "✅", title: { en: "Success", uk: "Успіх", es: "Éxito", zh: "成功" } },
-    important: { color: "8E24AA", icon: "❗", title: { en: "Important", uk: "Важливо", es: "Importante", zh: "重要" } },
-    warning:   { color: "F9A825", icon: "⚠️", title: { en: "Warning", uk: "Попередження", es: "Advertencia", zh: "警告" } },
-    danger:    { color: "E53935", icon: "⛔", title: { en: "Danger", uk: "Небезпека", es: "Peligro", zh: "危险" } }
+    info:      { color: "1E88E5", icon: "ℹ️", title: { en: "Info", uk: "Інформація", es: "Información", zh: "信息", pt: "Informação", ja: "情報", "zh-Hant": "資訊" } },
+    note:      { color: "78909C", icon: "📝", title: { en: "Note", uk: "Примітка", es: "Nota", zh: "注", pt: "Nota", ja: "注記", "zh-Hant": "註" } },
+    tip:       { color: "00897B", icon: "💡", title: { en: "Tip", uk: "Порада", es: "Consejo", zh: "提示", pt: "Dica", ja: "ヒント", "zh-Hant": "提示" } },
+    success:   { color: "43A047", icon: "✅", title: { en: "Success", uk: "Успіх", es: "Éxito", zh: "成功", pt: "Sucesso", ja: "成功", "zh-Hant": "成功" } },
+    important: { color: "8E24AA", icon: "❗", title: { en: "Important", uk: "Важливо", es: "Importante", zh: "重要", pt: "Importante", ja: "重要", "zh-Hant": "重要" } },
+    warning:   { color: "F9A825", icon: "⚠️", title: { en: "Warning", uk: "Попередження", es: "Advertencia", zh: "警告", pt: "Aviso", ja: "警告", "zh-Hant": "警告" } },
+    danger:    { color: "E53935", icon: "⛔", title: { en: "Danger", uk: "Небезпека", es: "Peligro", zh: "危险", pt: "Perigo", ja: "危険", "zh-Hant": "危險" } }
   };
   const CALLOUT_ALIAS = {
     caution: "danger", error: "danger", hint: "tip", check: "success", attention: "warning",
@@ -994,14 +1084,18 @@
   //   [TOC]                            table of contents
   //   <!-- docxmd: numbered-headings -->  number headings 1, 1.1, 1.1.1
   const WORDS = {
-    fig: { en: "Figure", uk: "Рисунок", es: "Figura", zh: "图" },
-    tbl: { en: "Table", uk: "Таблиця", es: "Tabla", zh: "表" },
-    toc: { en: "Contents", uk: "Зміст", es: "Contenido", zh: "目录" }
+    fig: { en: "Figure", uk: "Рисунок", es: "Figura", pt: "Figura", ja: "図", zh: "图", "zh-Hant": "圖" },
+    tbl: { en: "Table", uk: "Таблиця", es: "Tabla", pt: "Tabela", ja: "表", zh: "表", "zh-Hant": "表" },
+    toc: { en: "Contents", uk: "Зміст", es: "Contenido", pt: "Sumário", ja: "目次", zh: "目录", "zh-Hant": "目錄" }
   };
   const uiLang = () => (global.I18N && global.I18N.lang) || "en";
   // Language of generated words (Figure / Рисунок, callout titles): front matter
   // `lang:` when it is one of ours, otherwise the interface language.
-  const docLang = () => { const l = String((DOC.meta && DOC.meta.lang) || "").slice(0, 2).toLowerCase(); return WORDS.fig[l] ? l : uiLang(); };
+  const docLang = () => {
+    const raw = String((DOC.meta && DOC.meta.lang) || "").toLowerCase();
+    const l = /^zh[-_](hant|tw|hk|mo)/.test(raw) ? "zh-Hant" : raw.slice(0, 2);
+    return WORDS.fig[l] ? l : uiLang();
+  };
   const word = (k) => WORDS[k][docLang()] || WORDS[k].en;
   const NUMBERING_RE = /<!--\s*docxmd:\s*numbered-headings\s*-->/i;
   const SEC_ATTR_RE = /[ \t]*\{#sec:([A-Za-z0-9_-]+)\}[ \t]*$/;
@@ -1017,7 +1111,26 @@
     const h = /^#(h-\d+)$/.exec(href || "");
     return h && DOC.headings.some((x) => x.anchor === h[1] && x.linked) ? headingBookmark(h[1]) : null;
   }
-  function emptyDoc() { return { meta: null, htmlIds: new Set(), figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false }; }
+  // ---- Citations (js/cite.js, optional): [@key], @key, [BIB] ----
+  const CITE = () => global.DOCXMDCite || null;
+  // Word bookmark of a bibliography entry (keys may hold ":" "." "/" …)
+  // a key that changes when cleaned or cut (a.b / a_b, long keys) gets a short hash of the key itself
+  const refBookmark = (id) => {
+    const key = String(id), clean = key.replace(/[^A-Za-z0-9_]/g, "_");
+    if (clean === key && key.length <= 36) return "ref_" + key;
+    let h = 2166136261; for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return "ref_" + clean.slice(0, 28) + "_" + (h >>> 0).toString(36).padStart(7, "0").slice(0, 7);
+  };
+  // after analyzeDoc: hide bibliography data blocks, format citations, add the list at the end
+  function citeStep(tokens, D, meta) {
+    const C = CITE(); if (!C) return;
+    const inlineOnly = /(^|,|\[|\s)inline(\s|,|\]|$)/i.test([].concat(meta && meta.bibliography || []).join(","));
+    D.bibInline.forEach((t) => { if (inlineOnly || t._afterRefs) t.type = "bibData"; });
+    C.process(D, meta || {});
+    const L = C.last();
+    if (!D.hasRefs && L && (L.loading || (L.res && L.res.entries.length))) tokens.push({ type: "refsBlock", raw: "", auto: true });
+  }
+  function emptyDoc() { return { meta: null, htmlIds: new Set(), figs: {}, tbls: {}, secs: {}, headings: [], fnNum: {}, fnOrder: [], fnDefs: {}, fnSeen: {}, numbered: false, hIndex: 0, hasToc: false, cites: [], bibInline: [], hasRefs: false }; }
   let DOC = emptyDoc();
 
   function tokensText(tokens) {
@@ -1032,6 +1145,7 @@
     (function walk(list) {
       for (const t of list || []) {
         if (!t || typeof t !== "object") continue;
+        if (CITE()) CITE().collect(t, D);
         switch (t.type) {
           case "html": {
             const raw = t.raw || t.text || "";
@@ -1054,6 +1168,7 @@
             break;
           }
           case "figure": if (t.id && !(t.id in D.figs)) D.figs[t.id] = ++fig; break;
+          case "mermaid": if (t.id && !(t.id in D.figs)) D.figs[t.id] = ++fig; break;
           case "tableCaption": if (!(t.id in D.tbls)) D.tbls[t.id] = ++tbl; break;
           case "footnoteDef": D.fnDefs[t.id] = t; break;
           case "footnoteRef": if (!(t.id in D.fnNum)) { D.fnNum[t.id] = ++fn; D.fnOrder.push(t.id); } break;
@@ -1180,6 +1295,26 @@
   const TBLCAP_RE = /^(?:Table|Таблиця|Tabla|表)[ \t]*[:：][ \t]*([^\n]*?)[ \t]*\{#tbl:([A-Za-z0-9_-]+)\}[ \t]*(?:\n+|$)/;
   function structureExtensions() {
     return [
+      // ```mermaid {#fig:id caption="…" width=80%} — a diagram (numbered like a figure when it has an id)
+      { name: "mermaid", level: "block",
+        start(src) { const m = /(^|\n) {0,3}(?:`{3,}|~{3,})[ \t]*mermaid\b/.exec(src); return m ? m.index + m[1].length : undefined; },
+        tokenizer(src) {
+          const m = MERMAID_RE.exec(src); if (!m) return undefined;
+          const a = MMD() ? MMD().parseInfo(m[2]) : { id: "", caption: "", width: "" };
+          const text = m[3];
+          return { type: "mermaid", raw: m[0], text, info: m[2].trim(), id: a.id, caption: a.caption, width: a.width, align: a.align || "", rotate: a.rotate || 0,
+            key: MMD() ? MMD().register(text) : "", captionTokens: this.lexer.inlineTokens(a.caption) };
+        },
+        renderer(t) {
+          if (!MMD()) return '<pre><code class="language-mermaid">' + escHtml(t.text) + "</code></pre>\n";
+          const n = t.id ? DOC.figs[t.id] : 0, cap = t.caption ? this.parser.parseInline(t.captionTokens) : "";
+          const al = t.align === "left" ? "margin-left:0;margin-right:auto;" : t.align === "right" ? "margin-left:auto;margin-right:0;" : "";
+          const st = (t.width ? "width:" + widthCss(t.width) + ";" : "") + al;
+          return '<figure class="fig mmd-fig' + (t.align ? " mmd-al-" + escHtml(t.align) : "") + '"' + (t.id ? ' id="fig:' + escHtml(t.id) + '"' : "") + '><div class="mmd" data-mmd="' + escHtml(t.key) + '"' +
+            (t.rotate ? ' data-rot="' + (+t.rotate) + '"' : "") + (st ? ' style="' + escHtml(st) + '"' : "") + "></div>" +
+            (t.id ? "<figcaption><strong>" + word("fig") + " " + (n || "?") + "</strong>" + (cap ? " — " + cap : "") + "</figcaption>" : cap ? "<figcaption>" + cap + "</figcaption>" : "") +
+            "</figure>\n";
+        } },
       { name: "footnoteDef", level: "block",
         start(src) { const m = /(^|\n)\[\^[^\]\s]+\]:/.exec(src); return m ? m.index + m[1].length : undefined; },
         tokenizer(src) {
@@ -1279,6 +1414,7 @@
             tokens.unshift({ type: "frontMatter", raw: "", meta });
             if (BLOCK_MARKS && PRE) { DOC.blocks.push({ start: 0, end: PRE.fmLen, type: "frontMatter" }); tokens.unshift({ type: "blockMark", raw: "", n: DOC.blocks.length - 1 }); }
           }
+          citeStep(tokens, DOC, meta);
           if (DOC.fnOrder.length) tokens.push({ type: "footnotes", raw: "" });
           return tokens;
         }
@@ -1547,13 +1683,13 @@
     const fm = parseFrontMatter(md);
     const body = fm ? fm.body : String(md || "");
     const S = { headings: 0, h: [0, 0, 0, 0, 0, 0], paragraphs: 0, tables: 0, images: 0, figures: 0, captions: 0,
-      mathInline: 0, mathBlock: 0, footnotes: 0, linksExt: 0, linksInt: 0, code: 0, lists: 0, boxes: 0, marks: 0,
+      mathInline: 0, mathBlock: 0, diagrams: 0, citations: 0, sources: 0, footnotes: 0, linksExt: 0, linksInt: 0, code: 0, lists: 0, boxes: 0, marks: 0,
       words: (body.match(/\S+/g) || []).length, chars: body.length, charsNoSpace: body.replace(/\s/g, "").length,
       lines: body ? body.split("\n").length : 0, frontMatter: !!fm };
     if (!global.marked) return S;
     let tokens;
     try { tokens = global.marked.lexer(body); } catch (e) { return S; }
-    const fnIds = new Set();
+    const fnIds = new Set(), citeKeys = new Set();
     (function walk(list) {
       for (const t of list || []) {
         if (!t || typeof t !== "object") continue;
@@ -1570,6 +1706,8 @@
           case "footnoteRef": fnIds.add(t.id); break;
           case "link": if (/^#/.test(t.href || "")) S.linksInt++; else S.linksExt++; break;
           case "crossRef": S.linksInt++; break;
+          case "mermaid": S.diagrams++; break;
+          case "citation": S.citations++; t.items.forEach((x) => citeKeys.add(x.id)); break;
           case "code": S.code++; break;
           case "list": S.lists++; break;
           case "colorBox": S.boxes++; break;
@@ -1591,11 +1729,12 @@
       }
     })(tokens);
     S.footnotes = fnIds.size;
+    S.sources = citeKeys.size;
     return S;
   }
 
   // All DOCXMD marked extensions (register in the PWA and the VS Code webview)
-  function extensions() { return [alertExtension(), colorBoxExtension(), tableBoxExtension(), imageExtension(), markExtension(), frontMatterExtension(), blockMarkExtension()].concat(structureExtensions()); }
+  function extensions() { return (CITE() ? CITE().extensions() : []).concat([alertExtension(), colorBoxExtension(), tableBoxExtension(), imageExtension(), markExtension(), frontMatterExtension(), blockMarkExtension()]).concat(structureExtensions()); }
 
   // Numeric column detection (shared by preview and DOCX): a column with no
   // explicit alignment whose body cells are all numbers (optionally with a unit,
@@ -1653,9 +1792,58 @@
       }
     }
 
+    // citations: load the engine, styles and bibliography files before the synchronous part
+    const C = CITE();
+    if (C) {
+      const scan = { cites: [], bibInline: [], hasRefs: false };
+      (function walk(list) { for (const t of list || []) { if (!t || typeof t !== "object") continue; C.collect(t, scan); if (t.tokens) walk(t.tokens); if (t.items) t.items.forEach((it) => walk(it.tokens)); if (t.header) t.header.forEach((c) => walk(c.tokens)); if (t.rows) t.rows.forEach((r) => r.forEach((c) => walk(c.tokens))); } })(tokens);
+      report(0.25, "citations");
+      await C.ensure(meta, scan);
+    }
+
+    // Mermaid: light-theme SVG + PNG 3× per diagram (the SVG goes into the .docx after packing)
+    const svgByKey = new Map();
+    if (MMD()) {
+      const list = [];
+      (function walk(arr) {
+        for (const t of arr || []) {
+          if (!t || typeof t !== "object") continue;
+          if (t.type === "mermaid") list.push(t);
+          // <div align="center"> … ```mermaid … </div> is lexed again while building: prepare its diagrams too
+          if (t.type === "html" && /(?:`{3,}|~{3,})[ \t]*mermaid\b/.test(t.raw || t.text || "")) {
+            try { walk(global.marked.lexer(String(t.text || t.raw).replace(/^\s*<[^>]+>/, "").replace(/<\/[^>]+>\s*$/, "").trim())); } catch (e) {}
+          }
+          if (t.tokens) walk(t.tokens);
+          if (t.items) t.items.forEach((it) => walk(it.tokens));
+        }
+      })(tokens);
+      let k = 0;
+      for (const t of list) {
+        const vk = t.key + (t.rotate ? "r" + t.rotate : "");          // the same diagram turned is another picture
+        if (imgMap.has("mermaid:" + vk)) continue;
+        try {
+          const r = await MMD().exportImage(t.text, meta, t.rotate || 0);
+          if (r && r.png) {
+            const info = await blobToInfo(r.png, "diagram.png");
+            if (info) {
+              // logical size of the diagram (the PNG is 3×), never wider than the page — like any picture
+              let w = r.w, h = r.h;
+              if (w > MAX_IMG_W) { h = Math.round(h * MAX_IMG_W / w); w = MAX_IMG_W; }
+              if (h > MAX_DIAG_H) { w = Math.round(w * MAX_DIAG_H / h); h = MAX_DIAG_H; }      // a turned diagram fits on one page
+              info.width = Math.max(1, w); info.height = Math.max(1, h);
+              imgMap.set("mermaid:" + vk, info); svgByKey.set(vk, r.svg);
+            }
+          }
+        } catch (e) {}
+        report(0.25 + 0.05 * (++k / list.length), "diagrams");
+      }
+    }
+
     const previewDoc = DOC;
+    ZOT_MODE = !!(C && (opts.zotero || /^(?:true|yes|on|1)$/i.test(String(meta.zotero || ""))));
     DOC = analyzeDoc(tokens); // numbers figures/tables/footnotes/headings (same as the preview)
     DOC.meta = fm ? meta : null;
+    citeStep(tokens, DOC, meta);
 
     // default quote bar = the editor theme's accent (what the preview shows)
     const ctx = { D, imgMap, ol: 0, olStarts: new Set(), quoteColor: boxColor(opts.quoteColor) || "BBBBBB" };
@@ -1687,6 +1875,9 @@
             break;
           }
           case "footnoteDef": break;          // written as real Word footnotes (see below)
+          case "bibData": break;              // ```bibtex data of the bibliography
+          case "mermaid": body.push(...mermaidParas(tk, ctx)); break;
+          case "refsBlock": body.push(...bibParagraphs(tk, D)); break;
           case "figure": {
             const info = imgMap.get(tk.href);
             let img;
@@ -1717,7 +1908,7 @@
             break;
           case "mathBlock":
             body.push(new D.Paragraph({
-              children: [mathToOmml(D, tk.text)],
+              children: [mathToOmml(D, tk.text, true)],
               alignment: D.AlignmentType.CENTER,
               spacing: { before: 80, after: 120 }
             }));
@@ -1821,8 +2012,10 @@
     const section = { properties: { page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } } }, children: body };
     if (headerText) section.headers = { default: new D.Header({ children: [hfParagraph(headerText, null, D)] }) };
     if (footerText || pageFmt) section.footers = { default: new D.Footer({ children: [hfParagraph(footerText, pageFmt, D)] }) };
+    const zotProps = ZOT_MODE && C.last() && C.last().rec ? C.zoteroPrefs(meta) : null;
     const doc = new D.Document({
       footnotes,
+      customProperties: zotProps || undefined,
       features: DOC.hasToc ? { updateFields: true } : undefined,
       creator: metaText(meta.author) || "DOCXMD",
       title: metaText(meta.title) || opts.title || "Document",
@@ -1841,7 +2034,8 @@
           { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 32, bold: true, color: "1a1a1a" }, paragraph: { spacing: { before: 200, after: 100 } } },
           { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { size: 28, bold: true, color: "2a2a2a" }, paragraph: { spacing: { before: 160, after: 80 } } },
           // code blocks / inline code carry Pandoc's style names, so Word → Markdown restores them
-          { id: "SourceCode", name: "Source Code", basedOn: "Normal", run: { font: "Consolas", size: 20 } }
+          { id: "SourceCode", name: "Source Code", basedOn: "Normal", run: { font: "Consolas", size: 20 } },
+          { id: "Bibliography", name: "Bibliography", basedOn: "Normal", quickFormat: true }
         ],
         characterStyles: [
           { id: "VerbatimChar", name: "Verbatim Char", basedOn: "DefaultParagraphFont", run: { font: "Consolas", size: 20 } }
@@ -1851,7 +2045,9 @@
     });
 
     DOC = previewDoc;      // hand the preview's state back before the async packing
-    const blob = await D.Packer.toBlob(doc);
+    ZOT_MODE = false;
+    let blob = await D.Packer.toBlob(doc);
+    if (svgByKey.size && !opts.noSvg) blob = await MMD().addSvg(blob, svgByKey);   // vector copy of each diagram
     report(1, "done");
     return blob;
   }

@@ -6,5 +6,6 @@
   "cmd.exportHtml": "Export to HTML",
   "cmd.importDocx": "Import Word (.docx) to Markdown",
   "cmd.setDeeplKey": "Set DeepL API key",
-  "cmd.cleanNotation": "Clean up scientific notation"
+  "cmd.cleanNotation": "Clean up scientific notation",
+  "cmd.pasteFromAI": "Paste from AI (ChatGPT, Claude, Gemini…)"
 }

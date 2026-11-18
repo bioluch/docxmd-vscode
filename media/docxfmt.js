@@ -366,7 +366,7 @@
   // figure/table captions → {#fig:id} / Table: … {#tbl:id}, links → @fig:id,
   // heading bookmarks → {#sec:id}, TOC → [TOC], numbered headings → directive.
   const unBookmark = (name, kind) => name.slice(kind.length + 1).replace(/__/g, "-");
-  const LABEL_RE = /^\s*(?:Figure|Рисунок|Figura|图|Table|Таблиця|Tabla|表)\s*\d+\s*$/;
+  const LABEL_RE = /^\s*(?:Figure|Рисунок|Figura|图|圖|図|Table|Таблиця|Tabla|Tabela|表)\s*\d+\s*$/;
   function stripLabel(p) {
     // "<strong>Рисунок 1</strong> — caption" → "caption"
     const first = p.firstElementChild;
@@ -437,6 +437,8 @@
       const prev = cap.previousElementSibling;
       const img = prev && prev.nodeName === "P" && prev.querySelectorAll("img").length === 1 && !prev.textContent.trim() ? prev.querySelector("img") : null;
       if (!img) return;
+      // a Mermaid diagram written by DOCXMD: its alt text carries id + caption (js/mermaidx.js importHtml)
+      if (global.DOCXMDMermaid && /^mermaid:/.test(img.getAttribute("alt") || "")) { cap.remove(); return; }
       const f = document.createElement("p");
       f.setAttribute("data-docxmd-fig", id); f.setAttribute("data-src", img.getAttribute("src") || "");
       if (img.hasAttribute("width")) f.setAttribute("data-width", img.getAttribute("width"));
@@ -776,6 +778,11 @@
   async function toMarkdown(ab, fileBase) {
     const M = global.mammoth;
     if (!M || !global.TurndownService) throw new Error("import libraries failed to load");
+    // citation fields (Zotero / Mendeley / Word sources) → markers in a rewritten document.xml (js/cite.js)
+    let cites = null;
+    if (global.DOCXMDCite && global.DOCXMDCite.importPrepare) {
+      try { cites = await global.DOCXMDCite.importPrepare(ab); if (cites && cites.ab) ab = cites.ab; } catch (e) { console.warn("DOCXFMT citations", e); cites = null; }
+    }
     const [docXml, stylesXml] = await Promise.all([readZipEntry(ab, "word/document.xml"), readZipEntry(ab, "word/styles.xml")]);
     const styleMap = ["p[style-name='Quote'] => blockquote", "p[style-name='Intense Quote'] => blockquote"]
       .concat(highlightStyleMap(), codeStyleMap());
@@ -795,11 +802,18 @@
     formatRules(td);
     tableRule(td);
     // mammoth ignores table colours / alignment / widths: read them from the XML ourselves
-    const html = apply(result.value || "", await extract(ab));
+    let html = apply(result.value || "", await extract(ab));
+    // pictures that carry a Mermaid diagram (alt text "mermaid:…", written by DOCXMD) → the diagram source
+    const MMD = global.DOCXMDMermaid, mmd = MMD ? MMD.importHtml(html) : null;
+    if (mmd) html = mmd.html;
     let md = td.turndown(cleanHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    if (mmd && mmd.blocks.length) md = MMD.importMd(md, mmd.blocks).replace(/\n{3,}/g, "\n\n");
+    let citeMeta = null;
+    if (cites) { const r = global.DOCXMDCite.importFinish(md, cites); md = r.md; citeMeta = r.meta; }
     // Word header / footer / page numbers / main size → YAML front matter (exported back the same way)
     let meta = await extractMeta(ab, fileBase || "");
     if (fa.docSize && fa.docSize !== 11) meta = Object.assign(meta || {}, { "font-size": fa.docSize + "pt" });
+    if (citeMeta) meta = Object.assign(meta || {}, citeMeta);
     if (meta) md = frontMatterText(meta) + md;
     return md;
   }

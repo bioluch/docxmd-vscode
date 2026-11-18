@@ -1,28 +1,31 @@
 {
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
-  "description": "Edit Markdown with a live neumorphic preview, LaTeX math, callout blocks, highlights and colour boxes; clean up scientific notation; export to Word (.docx) with headers, footers and page numbers, and import Word back to Markdown — inside VS Code. Companion to the DOCXMD PWA.",
-  "version": "0.6.0",
+  "description": "Private offline Markdown ↔ Word converter for researchers, students, technical writers and ChatGPT/AI users: native Word equations, citations (BibTeX, Zotero; APA, IEEE, DSTU 8302), Mermaid diagrams, Word import — with a live preview.",
+  "version": "0.7.0",
   "publisher": "docxmd",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
-    "Other",
-    "Visualization"
+    "Formatters",
+    "Other"
   ],
   "keywords": [
     "markdown",
-    "docx",
     "word",
-    "preview",
-    "converter",
+    "docx",
+    "export word",
+    "pandoc",
+    "bibtex",
+    "citations",
+    "zotero",
+    "mermaid",
+    "chatgpt",
     "latex",
-    "katex",
-    "import",
-    "highlight",
-    "scientific notation",
-    "front matter"
+    "equations",
+    "converter",
+    "preview"
   ],
   "license": "SEE LICENSE IN LICENSE",
   "homepage": "https://github.com/bioluch/docxmd-vscode#readme",
@@ -43,7 +46,7 @@
         "docxmd.deeplApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Your personal DeepL API key, used to translate documents into the interface languages (EN · UK · ES · ZH). Stored locally in your VS Code settings and sent only to DeepL. Get a free key at https://www.deepl.com/pro-api."
+          "markdownDescription": "Your personal DeepL API key, used to translate documents into the interface languages (EN · UK · ES · PT · JA · ZH · ZH-Hant). Stored locally in your VS Code settings and sent only to DeepL. Get a free key at https://www.deepl.com/pro-api."
         },
         "docxmd.pastedImages": {
           "type": "string",
@@ -63,6 +66,11 @@
           "default": "",
           "markdownDescription": "Dictionary for **DOCXMD: Clean up scientific notation**, one entry per line: `TCore = T_{Core}`, `R2 = R^{2}`, or just `CH4` (digits become subscripts). Empty = the built-in medical list (SpO2, CO2, O2, H2O, HbA1c, PaO2, PaCO2, SaO2, EtCO2, TCore, TPeriphery, TMean, TStd, R2).",
           "editPresentation": "multilineText"
+        },
+        "docxmd.zoteroFields": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Export citations to Word as live **Zotero** fields (Zotero's *Refresh* in Word keeps working). Off: plain formatted citations. Reopen the editor after changing."
         }
       }
     },
@@ -110,6 +118,11 @@
       {
         "command": "docxmd.cleanNotation",
         "title": "%cmd.cleanNotation%",
+        "category": "DOCXMD"
+      },
+      {
+        "command": "docxmd.pasteFromAI",
+        "title": "%cmd.pasteFromAI%",
         "category": "DOCXMD"
       }
     ],

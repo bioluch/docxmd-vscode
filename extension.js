@@ -213,6 +213,19 @@ function activate(context) {
   // Import a Word document as Markdown (palette / explorer context on .docx)
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.importDocx", (uri) => importDocx(uri)));
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.cleanNotation", () => cleanNotation()));
+  // Paste from AI: the clipboard text (ChatGPT, Claude, Gemini…) repaired by media/aipaste.js in the editor
+  context.subscriptions.push(vscode.commands.registerCommand("docxmd.pasteFromAI", async () => {
+    const text = await vscode.env.clipboard.readText();
+    if (!text.trim()) { vscode.window.showInformationMessage("DOCXMD: the clipboard is empty — copy an AI answer first."); return; }
+    if (activePanel) { activePanel.webview.postMessage({ type: "aipaste", text }); return; }
+    const AIP = require("./media/aipaste.js").DOCXMDAIPaste;
+    const r = AIP && AIP.convert("", text, {});
+    const md = r ? r.md : text;
+    const ed = vscode.window.activeTextEditor;
+    if (ed && /markdown|plaintext/.test(ed.document.languageId)) { await ed.edit((b) => b.replace(ed.selection, md)); return; }
+    const doc = await vscode.workspace.openTextDocument({ language: "markdown", content: md });
+    await vscode.window.showTextDocument(doc);
+  }));
 
   // Ask the active DOCXMD editor to export to .html
   context.subscriptions.push(
@@ -413,7 +426,8 @@ class DocxmdEditorProvider {
   _html(webview) {
     const csp = webview.cspSource;
     const v = (...p) => this._uri(webview, ...p);
-    const lang = String(vscode.env.language || "en").slice(0, 2).toLowerCase();
+    const vl = String(vscode.env.language || "en").toLowerCase();
+    const lang = /^zh-(tw|hk|mo|hant)/.test(vl) ? "zh-Hant" : vl.slice(0, 2);   // VS Code: "zh-tw" → Traditional Chinese
     const svg = (d) => '<svg viewBox="0 0 24 24" aria-hidden="true">' + d + "</svg>";
     return `<!DOCTYPE html>
 <html lang="${lang}" data-lang="${lang}" data-theme="dark">
@@ -426,7 +440,7 @@ class DocxmdEditorProvider {
 <link rel="stylesheet" href="${v("vendor", "katex.min.css")}" />
 <link rel="stylesheet" href="${v("webview.css")}" />
 </head>
-<body>
+<body data-zotero="${vscode.workspace.getConfiguration("docxmd").get("zoteroFields") ? 1 : 0}" data-cite-base="${v("vendor", "citeproc")}/" data-mmd-base="${v("vendor", "mermaid")}/">
   <div class="bar" role="toolbar">
     <button class="tb" id="outlineBtn" data-tt="view.outline" aria-pressed="false">${svg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>')}</button>
     <span class="sep"></span>
@@ -533,6 +547,10 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "purify.min.js")}"></script>
   <script src="${v("vendor", "highlight.min.js")}"></script>
   <script src="${v("vendor", "docx.umd.js")}"></script>
+  <script src="${v("docxzip.js")}"></script>
+  <script src="${v("mml2omml.js")}"></script>
+  <script src="${v("mermaidx.js")}"></script>
+  <script src="${v("cite.js")}"></script>
   <script src="${v("md2docx.js")}"></script>
   <script src="${v("docxfmt.js")}"></script>
   <script src="${v("imgresize.js")}"></script>
@@ -545,6 +563,7 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "mammoth.browser.min.js")}"></script>
   <script src="${v("vendor", "turndown.min.js")}"></script>
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>
+  <script src="${v("aipaste.js")}"></script>
   <script src="${v("translate.js")}"></script>
   <script src="${v("vendor", "katex.min.js")}"></script>
   <script src="${v("webview.js")}"></script>

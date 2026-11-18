@@ -1,0 +1,38 @@
+MIT License
+
+Copyright (c) 2026 Yuriy Nabasov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Ліцензія MIT
+
+Авторське право (c) 2026 Юрій Набасов
+
+Цим надається безкоштовний дозвіл будь-якій особі, яка отримує копію
+цього програмного забезпечення та пов'язаних з ним файлів документації («Програмне забезпечення»), використовувати
+Програмне забезпечення без обмежень, включаючи, без обмежень, права
+використовувати, копіювати, змінювати, об'єднувати, публікувати, розповсюджувати, субліцензувати та/або продавати
+копії Програмного забезпечення, а також дозволяти особам, яким надається Програмне забезпечення, робити це, за таких умов:
+
+Вищезазначене повідомлення про авторські права та це повідомлення про дозвіл повинні бути включені до всіх
+копій або суттєвих частин Програмного забезпечення.
+
+ПРОГРАМНЕ ЗАБЕЗПЕЧЕННЯ НАДАЄТЬСЯ «ЯК Є», БЕЗ БУДЬ-ЯКИХ ГАРАНТІЙ, ЯВНИХ АБО
+НЕЯВНИХ, ВКЛЮЧАЮЧИ, АЛЕ НЕ ОБМЕЖУЮЧИСЬ ГАРАНТІЯМИ ТОВАРНОЇ ПРИДАТНОСТІ,
+ПРИДАТНОСТІ ДЛЯ ПЕВНОЇ МЕТИ ТА НЕПОРУШЕННЯ ПРАВ. ЗА ЖОДНИХ ОБСТАВИН АВТОРИ АБО ВЛАСНИКИ АВТОРСЬКИХ ПРАВ НЕ НЕСУТЬ ВІДПОВІДАЛЬНОСТІ ЗА БУДЬ-ЯКІ ПРЕТЕНЗІЇ, ЗБИТКИ АБО ІНШІ ВІДПОВІДАЛЬНОСТІ, ЧИ ТО ВИНИКЛИ В ВИНІ ДІЇ ЗА ДОГОВОРОМ, ДЕЛІКТУ ЧИ ІНШИМ ЧИНОМ, ЩО ВИНИКЛИ В ЗВ'ЯЗКУ З ПРОГРАМНИМ ЗАБЕЗПЕЧЕННЯМ АБО З ВИКОРИСТАННЯМ АБО ІНШИМИ ДІЯМИ В ПРОГРАМНОМУ ЗАБЕЗПЕЧЕННІ.

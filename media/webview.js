@@ -154,6 +154,29 @@
     t: (k, v) => t(k, v), toast: (m) => info(m)
   }) : null;
 
+  /* ---------- citations (cite.js + citeproc) and Mermaid diagrams (mermaidx.js) — as in the web app ---------- */
+  const CITE = window.DOCXMDCite || null, MMDX = window.DOCXMDMermaid || null;
+  if (CITE) CITE.configure({
+    base: document.body.dataset.citeBase,
+    scope: () => docBase || "untitled",
+    // bibliography: refs.bib / csl: my.csl — read from the document's folder
+    resolve: async (p) => {
+      if (!docBase || /^[a-z]+:/i.test(p)) return null;
+      try { const r = await fetch(resolveRel(p)); return r.ok ? await r.text() : null; } catch (e) { return null; }
+    },
+    library: async () => null,
+    onChange: () => scheduleRender()
+  });
+  if (MMDX) MMDX.configure({ base: document.body.dataset.mmdBase });
+  function mmdOpts(md, forExport) {
+    const fm = window.MD2DOCX && MD2DOCX.parseFrontMatter ? MD2DOCX.parseFrontMatter(md || "") : null, meta = (fm && fm.meta) || {};
+    const val = (x) => (Array.isArray(x) ? x.join(", ") : x ? String(x) : "");
+    let theme = val(meta["mermaid-theme"]) || "default";
+    if (forExport) theme = theme === "dark" ? "default" : theme;
+    else if (!meta["mermaid-theme"] && document.documentElement.getAttribute("data-theme") !== "white") theme = "dark";
+    return { theme, font: val(meta["mermaid-font"]) || val(meta.font) };
+  }
+
   /* ---------- preview ---------- */
   let renderTimer = null;
   function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(render, 160); }
@@ -168,10 +191,11 @@
     if (marks) MD2DOCX.setBlockMarks(true);
     try { html = marked.parse(md); } catch (e) { html = "<p>" + escapeHtml(e.message || "") + "</p>"; }
     if (marks) { MD2DOCX.setBlockMarks(false); PE.setBlocks(MD2DOCX.blocks(), md); }
-    preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k", "data-b"], ADD_TAGS: ["input"] });
+    preview.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target", "id", "class", "align", "data-k", "data-b", "data-mmd"], ADD_TAGS: ["input"] });
     if (window.MD2DOCX && MD2DOCX.applyDocFont) MD2DOCX.applyDocFont(preview, md);   // front matter font / font-size
     PE.annotateBlocks(preview);
     if (mathStore.length) $$(".katex-ph", preview).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
+    if (MMDX && preview.querySelector(".mmd[data-mmd]")) MMDX.fill(preview, mmdOpts(md));
     enhanceTables(preview);
     if (window.MD2DOCX && MD2DOCX.justifyBreaks) MD2DOCX.justifyBreaks(preview);   // justified lines ending in a hard break
     if (tableEdit) tableEdit.refresh();
@@ -227,8 +251,21 @@
   ta.addEventListener("input", () => { scheduleRender(); if (ED.syntax() || ED.lines()) paintEditor(); else schedulePaint(); pushEdit(); });
   ta.addEventListener("blur", () => { if (editTimer) flushEdit(); });
 
+  const AI_NAMES = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini", copilot: "Copilot", perplexity: "Perplexity", deepseek: "DeepSeek", grok: "Grok" };
+  // force: the "Paste from AI" command — convert even when the text does not look like an AI answer
+  function aiPaste(html, plain, force) {
+    const AIP = window.DOCXMDAIPaste; if (!AIP) return false;
+    if (!force && !AIP.detect(html, plain).ai) return false;
+    const r = AIP.convert(html, plain, {});
+    if (!r || (!force && !r.total && r.via !== "html")) return false;
+    let md = r.md.replace(/\n+$/, ""); if (/\n/.test(md)) md += "\n";
+    withEditor(() => replaceSel(foldText(md)));
+    info("DOCXMD: " + (AI_NAMES[r.source] || "AI") + " answer pasted · " + r.total + " fix" + (r.total === 1 ? "" : "es") + " (Ctrl+Z undoes)");
+    return true;
+  }
   window.addEventListener("message", (ev) => {
     const msg = ev.data || {};
+    if (msg.type === "aipaste") { aiPaste("", String(msg.text || ""), true); return; }
     if (msg.type === "update" && msg.name) docName = msg.name;
     const incoming = msg.type === "update" && typeof msg.text === "string" ? foldText(msg.text) : null;
     if (msg.type === "update" && msg.base != null && msg.base !== docBase) { docBase = msg.base; if (incoming === ta.value) render(); }
@@ -303,7 +340,7 @@
   let pinDepth = 0, pinSaved = null;
   function pinEditor() {
     if (pinDepth++) return;
-    const ta = ta, r = ta.getBoundingClientRect();
+    const r = ta.getBoundingClientRect();
     if (!r.width || !r.height) return;
     pinSaved = ta.style.cssText;
     Object.assign(ta.style, { position: "fixed", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px", margin: "0", boxSizing: "border-box" });
@@ -312,7 +349,7 @@
     if (--pinDepth > 0) return;
     pinDepth = 0;
     if (pinSaved == null) return;
-    const ta = ta, top = ta.scrollTop;
+    const top = ta.scrollTop;
     ta.style.cssText = pinSaved; pinSaved = null;
     ta.scrollTop = top;
   }
@@ -678,7 +715,10 @@
     const plain0 = e.clipboardData ? e.clipboardData.getData("text/plain") : "";
     if (FOLD && FOLD.has(plain0)) { e.preventDefault(); plainPaste = false; replaceSel(foldText(plain0)); return; }
     if (plainPaste) { plainPaste = false; return; }
-    if (!window.DOCXMDEdit || !e.clipboardData) return;
+    if (!e.clipboardData) return;
+    // an answer copied from ChatGPT, Claude, Gemini… → formulas, tables and sources repaired (aipaste.js)
+    if (aiPaste(e.clipboardData.getData("text/html"), plain0, false)) { e.preventDefault(); return; }
+    if (!window.DOCXMDEdit) return;
     const link = DOCXMDEdit.pasteLink(ta.value, ta.selectionStart, ta.selectionEnd, e.clipboardData.getData("text/plain"));
     if (link) { e.preventDefault(); applyEditAction(link); return; }
     if (ED.pasteHtml()) {
@@ -1122,7 +1162,7 @@
     const btn = $("#exportBtn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "…";
     try {
       const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
-      const blob = await window.MD2DOCX.toBlob(md, { title: docName, quoteColor: accent, resolveUrl: resolveRel,
+      const blob = await window.MD2DOCX.toBlob(md, { title: docName, quoteColor: accent, resolveUrl: resolveRel, zotero: document.body.dataset.zotero === "1",
         resolveAsset: (src) => (FOLD && FOLD.isToken(src) ? FOLD.blobOf(IMGS, src) : null) });
       const buf = await blob.arrayBuffer();
       vscode.postMessage({ type: "saveDocx", dataBase64: abToB64(buf) });
@@ -1142,7 +1182,7 @@
     mathStore = [];
     const tmp = document.createElement("div");
     mathOutput = "mathml";
-    try { tmp.innerHTML = DOMPurify.sanitize(marked.parse(md), { ADD_ATTR: ["target", "id", "class", "align", "data-k"], ADD_TAGS: ["input"] }); }
+    try { tmp.innerHTML = DOMPurify.sanitize(marked.parse(md), { ADD_ATTR: ["target", "id", "class", "align", "data-k", "data-mmd"], ADD_TAGS: ["input"] }); }
     finally { mathOutput = "htmlAndMathml"; }
     if (mathStore.length) $$(".katex-ph", tmp).forEach((ph) => { const i = +ph.getAttribute("data-k"); if (mathStore[i] != null) ph.innerHTML = mathStore[i]; });
     if (FOLD) $$("img", tmp).forEach((im) => { const s = im.getAttribute("src"); if (FOLD.isToken(s)) { const d = FOLD.dataOf(IMGS, s); if (d) im.setAttribute("src", d); } });

@@ -416,11 +416,15 @@
         return { start: a, end: b, text: "\n\n", selStart: a + 2, selEnd: a + 2 };
       };
       const lineBreakEnd = (line) => / {2,}$|\\$|<br\s*\/?>[ \t]*$/i.test(line);
+      // a literal <br> inside a `code span` is text, not a break: never split there
+      const spans = [], cre = /(`+)[^`]*?(?:(?!\1)`+[^`]*?)*?\1(?!`)/g;
+      for (let m; (m = cre.exec(tx.slice(ls, le))); ) spans.push([ls + m.index, ls + m.index + m[0].length]);
+      const inCode = (a, b) => spans.some((r) => a < r[1] && b > r[0]);
       // right after an inline <br> / right before one
       const pre = /<br\s*\/?>[ \t]*$/i.exec(tx.slice(ls, s));
-      if (pre && s > ls) return split(s - pre[0].length, s);
+      if (pre && s > ls && !inCode(s - pre[0].length, s)) return split(s - pre[0].length, s);
       const post = /^[ \t]*<br\s*\/?>/i.exec(tx.slice(s, le));
-      if (post && BR_TAG.test(post[0])) return split(s, s + post[0].length + (s + post[0].length === le && le < tx.length ? 1 : 0));
+      if (post && BR_TAG.test(post[0]) && !inCode(s, s + post[0].length)) return split(s, s + post[0].length + (s + post[0].length === le && le < tx.length ? 1 : 0));
       // the start of a line that follows a hard break
       if (s === ls && ls > 0) {
         const pls = tx.lastIndexOf("\n", ls - 2) + 1, prev = tx.slice(pls, ls - 1);

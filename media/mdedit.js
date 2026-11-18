@@ -327,15 +327,20 @@
     if (!html || !/<[a-z]/i.test(html)) return false;
     return /<(p|h[1-6]|ul|ol|li|table|blockquote|strong|b|em|i|a\s[^>]*href|img|pre|code|sup|sub|u|s|del|mark)\b/i.test(html);
   }
-  function htmlToMarkdown(html) {
-    if (!global.TurndownService || typeof DOMParser === "undefined" || !isRichHtml(html)) return null;
+  // opts (Paste from AI, js/aipaste.js): force — convert any HTML; prepare(doc) — rewrite
+  // the parsed DOM first; rules(td) — extra Turndown rules (they win over the default ones)
+  function htmlToMarkdown(html, opts) {
+    opts = opts || {};
+    if (!global.TurndownService || typeof DOMParser === "undefined" || !(opts.force ? html && /<[a-z]/i.test(html) : isRichHtml(html))) return null;
     const doc = new DOMParser().parseFromString(html, "text/html");
+    if (opts.prepare) opts.prepare(doc);
     doc.querySelectorAll("style,script,meta,title,link,o\\:p").forEach((n) => n.remove());
     // Word's <p><b><span>…</span></b></p> soup: drop empty spans, keep text
     const td = new global.TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced", bulletListMarker: "-", emDelimiter: "*", strongDelimiter: "**", hr: "---" });
     if (global.turndownPluginGfm) td.use(global.turndownPluginGfm.gfm);
     td.keep(["sub", "sup"]);
     if (global.DOCXFMT && global.DOCXFMT.markdownRules) global.DOCXFMT.markdownRules(td);
+    if (opts.rules) opts.rules(td);
     let md = td.turndown(doc.body.innerHTML || "");
     md = md.replace(/\u00A0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n")
       .replace(/^([ \t]*)([-*+]|\d+\.)[ \t]{2,}(?=\S)/gm, "$1$2 ")            // Turndown pads markers: "-   item" → "- item"

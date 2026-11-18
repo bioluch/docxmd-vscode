@@ -9,11 +9,11 @@
 (function (global) {
   "use strict";
 
-  const LANGS = ["en", "uk", "es", "zh"];
+  const LANGS = ["en", "uk", "es", "pt", "ja", "zh", "zh-Hant"];
   // DeepL target codes: "EN" / "ZH" are deprecated aliases — use the explicit variants.
   // Source codes stay plain (DeepL rejects variants as source_lang).
-  const DEEPL = { en: "EN-GB", uk: "UK", es: "ES", zh: "ZH-HANS" };
-  const DEEPL_SRC = { en: "EN", uk: "UK", es: "ES", zh: "ZH" };
+  const DEEPL = { en: "EN-GB", uk: "UK", es: "ES", pt: "PT-BR", ja: "JA", zh: "ZH-HANS", "zh-Hant": "ZH-HANT" };
+  const DEEPL_SRC = { en: "EN", uk: "UK", es: "ES", pt: "PT", ja: "JA", zh: "ZH", "zh-Hant": "ZH" };
 
   // ---- inline protection -------------------------------------------------
   const OPEN = "", CLOSE = "";
@@ -251,8 +251,11 @@
       }
     } catch (e) {}
     // crude fallback by script
+    if (/[぀-ヿ]/.test(sample)) return "ja";          // hiragana / katakana
     if (/[一-鿿]/.test(sample)) return "zh";
     if (/[Ѐ-ӿ]/.test(sample)) return "uk";
+    // ç alone is not enough (Spanish/Catalan "Barça", French): ã/õ, or ç with ê/ô, are Portuguese only
+    if (/[ãõ]/i.test(sample) || (/ç/i.test(sample) && /[êô]/i.test(sample))) return "pt";
     if (/[áéíóúñ¿¡]/i.test(sample)) return "es";
     return "en";
   }
@@ -265,12 +268,15 @@
     // DeepL auto-detects the source language, so only run on-device detection
     // for the Chrome engine (which requires an explicit sourceLanguage).
     let source = opts.source || null;
-    if (provider !== "deepl") {
-      const detected = source || await detect(md);
-      source = (detected && detected !== target) ? detected : null;
-    }
     const { out, jobs } = segment(md);
     const texts = jobs.map((j) => j.text);
+    // nothing to translate (only code, math, links…): no detection, no engine, no language-pack download
+    if (!jobs.length) { if (onProgress) onProgress(1); return md; }
+    if (provider !== "deepl") {
+      // detect from the prose that will be translated — not from code, math, URLs or front-matter keys
+      const detected = source || await detect(texts.join("\n"));
+      source = (detected && detected !== target) ? detected : null;
+    }
     if (onProgress) onProgress(0.02);
     let translated;
     if (provider === "deepl") {
@@ -284,5 +290,7 @@
     return out.join("\n");
   }
 
-  global.MDTranslate = { run, detect, chromeAvailability, hasChrome: () => !!getTranslatorAPI(), LANGS };
+  // the translatable prose of a Markdown document (for language detection by callers)
+  const prose = (md) => segment(String(md || "")).jobs.map((j) => j.text).join("\n");
+  global.MDTranslate = { run, detect, prose, chromeAvailability, hasChrome: () => !!getTranslatorAPI(), LANGS };
 })(typeof window !== "undefined" ? window : this);
