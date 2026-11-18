@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+Fixes from a code review, shared with the DOCXMD web app 3.0.11:
+
+- **Paste from AI** goes to the editor that has the focus: a native Markdown editor in another group gets the paste even while a DOCXMD panel is visible. HTML with equations is preferred over plain text in which they were flattened.
+- **Citations:** live Zotero fields carry `uris` (Zotero 7 no longer fails on Refresh / Edit Citation for embedded items). Word import keeps two works with the same title, author and year apart, restores citations in footnotes and endnotes, handles nested Mendeley controls, keeps the text around a bibliography that spans paragraphs, and a `$&` in a title no longer breaks the bibliography. A changed `refs.bib` is always read again.
+- **Mermaid:** an empty diagram no longer swallows the next paragraph; several diagrams in one Word paragraph are all restored; only the diagram's own caption is removed on import; a theme change keeps YAML front matter first; editing a diagram never changes a code example that shows one.
+- **Translation:** `[@key]` and `@key` citations are not sent for translation; Traditional Chinese is detected as such.
+- **UPPERCASE / lowercase** keeps link and image addresses unchanged.
+
 ## 0.7.0
 
 - **Paste from AI → Word:** answers from ChatGPT, Claude, Gemini, Copilot, Perplexity and DeepSeek keep their formulas and tables when pasted. Chat buttons and citation marks are removed, and numbered sources become footnotes. New command **DOCXMD: Paste from AI**.
