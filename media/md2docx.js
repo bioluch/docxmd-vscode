@@ -110,7 +110,9 @@
   }
   // ---- Mermaid diagrams (js/mermaidx.js, optional) ----
   const MMD = () => global.DOCXMDMermaid || null;
-  const MERMAID_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*mermaid\b([^\n`]*)\n([\s\S]*?)(?:\n {0,3}\1[`~]*[ \t]*(?:\n+|$)|$)/;
+  // an empty diagram closes on the first body line, so the paragraph after it stays a paragraph
+  // (the closing fence repeats only the opening character: ``` is not closed by ```~~~)
+  const MERMAID_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*mermaid\b([^\n`]*)\n(?: {0,3}\1(?:(?<=`)`*|(?<=~)~*)[ \t]*(?:\n+|$)|([\s\S]*?)(?:\n {0,3}\1(?:(?<=`)`*|(?<=~)~*)[ \t]*(?:\n+|$)|$))/;
   // picture + caption paragraphs (or the source as a code block when it could not be drawn)
   function mermaidParas(tk, ctx) {
     const D = ctx.D, out = [];
@@ -1301,7 +1303,7 @@
         tokenizer(src) {
           const m = MERMAID_RE.exec(src); if (!m) return undefined;
           const a = MMD() ? MMD().parseInfo(m[2]) : { id: "", caption: "", width: "" };
-          const text = m[3];
+          const text = m[3] || "";
           return { type: "mermaid", raw: m[0], text, info: m[2].trim(), id: a.id, caption: a.caption, width: a.width, align: a.align || "", rotate: a.rotate || 0,
             key: MMD() ? MMD().register(text) : "", captionTokens: this.lexer.inlineTokens(a.caption) };
         },

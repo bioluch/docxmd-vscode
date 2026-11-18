@@ -33,6 +33,10 @@
     s = s.replace(/\[\^[^\]\s]+\]:?/g, push);              // footnote refs / definitions
     s = s.replace(/\{#[a-z]+:[^}\n]*\}/g, push);            // {#fig:id} {#tbl:id} {#sec:id}
     s = s.replace(/\[?@(?:fig|tbl|sec):[A-Za-z0-9_-]+\]?/g, push); // cross-references
+    // bibliography citations: [@key], [see @a, p. 3; -@b] and the narrative @key (not an e-mail)
+    s = s.replace(/\[(?:[^\[\]\n]*?[\s;])?-?@[A-Za-z0-9_][^\[\]\n]*\](?!\()/g, push);
+    s = s.replace(/(?<![\w.@])@[A-Za-z0-9_](?:[\w:.#$%&+?<>~/-]*\w)?/g, push);
+    s = s.replace(/^\[BIB\]$/g, push);                     // bibliography placeholder
     s = s.replace(/^\[TOC\]$/gi, push);                     // table of contents
     s = s.replace(/==(?:[A-Za-z\u0400-\u04FF]+:)?(?=\S)|(?<=\S)==/g, push); // ==highlight== / ==red:…== markers
     return { s, store };
@@ -237,17 +241,23 @@
   }
 
   // ---- language detection ------------------------------------------------
+  // BCP 47 → the app's codes: zh-Hant / zh-TW / zh-HK / zh-MO → "zh-Hant", zh / zh-Hans / zh-CN → "zh"
+  function appLang(tag) {
+    const t = String(tag || "").replace(/_/g, "-").toLowerCase();
+    if (/^zh(-|$)/.test(t)) return /^zh-(hant|tw|hk|mo)\b/.test(t) ? "zh-Hant" : "zh";
+    return t.slice(0, 2);
+  }
   async function detect(sample) {
     try {
       const D = global.LanguageDetector || (global.translation && global.translation);
       if (global.LanguageDetector && global.LanguageDetector.create) {
         const det = await global.LanguageDetector.create();
         const r = await det.detect(sample.slice(0, 2000));
-        if (r && r[0] && r[0].detectedLanguage) return r[0].detectedLanguage.slice(0, 2);
+        if (r && r[0] && r[0].detectedLanguage) return appLang(r[0].detectedLanguage);
       } else if (global.translation && global.translation.createDetector) {
         const det = await global.translation.createDetector();
         const r = await det.detect(sample.slice(0, 2000));
-        if (r && r[0] && r[0].detectedLanguage) return r[0].detectedLanguage.slice(0, 2);
+        if (r && r[0] && r[0].detectedLanguage) return appLang(r[0].detectedLanguage);
       }
     } catch (e) {}
     // crude fallback by script

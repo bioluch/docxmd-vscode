@@ -217,7 +217,9 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand("docxmd.pasteFromAI", async () => {
     const text = await vscode.env.clipboard.readText();
     if (!text.trim()) { vscode.window.showInformationMessage("DOCXMD: the clipboard is empty — copy an AI answer first."); return; }
-    if (activePanel) { activePanel.webview.postMessage({ type: "aipaste", text }); return; }
+    // only when the DOCXMD panel itself has the focus — a native Markdown editor focused in
+    // another group gets the paste there, even if a DOCXMD panel is still visible
+    if (activePanel && activePanel.active) { activePanel.webview.postMessage({ type: "aipaste", text }); return; }
     const AIP = require("./media/aipaste.js").DOCXMDAIPaste;
     const r = AIP && AIP.convert("", text, {});
     const md = r ? r.md : text;

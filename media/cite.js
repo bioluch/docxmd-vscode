@@ -367,6 +367,7 @@
     locales: new Map(),     // en-US → xml
     library: undefined,     // text|null (undefined: not asked yet)
     libVer: 0,
+    gen: 0,                 // bumped by invalidate(): reads started before it never fill the caches
     engines: new Map(),     // sig → { engine, items, ids:Set, numeric, missing:[] }
     loading: new Map(),     // what → Promise
     scriptP: null,
@@ -426,21 +427,22 @@
   async function getFile(path, p) {
     const key = (p ? p.scope : cfg.scope()) + "\u0000" + path;
     if (S.files.has(key)) return S.files.get(key);
-    const resolve = p ? p.resolve : cfg.resolve;
-    return once("file:" + key, async () => {
+    const resolve = p ? p.resolve : cfg.resolve, gen = S.gen;
+    return once("file:" + gen + "\u0000" + key, async () => {
       let text = null;
       try { text = resolve ? await resolve(path) : null; } catch (e) { text = null; }
-      S.files.set(key, text);
+      if (gen === S.gen) S.files.set(key, text);
       return text;
     });
   }
   async function getLibrary() {
     if (S.library !== undefined) return S.library;
-    return once("library", async () => {
+    const gen = S.gen;
+    return once("library:" + gen, async () => {
       let text = null;
       try { text = cfg.library ? await cfg.library() : null; } catch (e) { text = null; }
-      S.library = text || null;
-      return S.library;
+      if (gen === S.gen) S.library = text || null;
+      return text || null;
     });
   }
   // forget cached files / library (after the user attached a new one or the folder changed)
@@ -449,6 +451,7 @@
     if (!what || what === "files") S.files.clear();
     if (!what || what === "styles" || what === "files") Array.from(S.styles.keys()).forEach((k) => { if (!isBuiltin(k)) S.styles.delete(k); });
     S.engines.clear();
+    S.gen++;
   }
 
   function plan(meta, D) {
@@ -458,7 +461,7 @@
     // the document's folder and resolver, taken now: an await later the user may be in another tab
     const scope = cfg.scope(), resolve = cfg.resolve;
     const local = paths.length || !isBuiltin(styleKey);
-    const sig = [styleKey, loc, local ? scope + "|" + paths.join("|") : "", hash(inline.map((x) => x.lang + x.text).join("\u0000")), S.libVer].join("\u0001");
+    const sig = [styleKey, loc, local ? scope + "|" + paths.join("|") : "", hash(inline.map((x) => x.lang + x.text).join("\u0000")), S.libVer, S.gen].join("\u0001");
     return { styleKey, loc, paths, inline, sig, scope, resolve };
   }
   // the entries a document can cite: ```bibtex blocks, bibliography: files, My library
@@ -503,7 +506,7 @@
       const numeric = /citation-format="numeric"/.test(styleXml);
       const note = /class="note"/.test(styleXml);
       const rec = { engine, items, numeric, note, missing, styleUsed, styleFallback: styleUsed !== p.styleKey ? p.styleKey : null, cacheKey: null, cacheVal: null };
-      S.engines.set(p.sig, rec);
+      if (p.sig.split("\u0001").pop() === String(S.gen)) S.engines.set(p.sig, rec);   // not after an invalidate()
       if (S.engines.size > 6) S.engines.delete(S.engines.keys().next().value);
       return rec;
     });
@@ -676,7 +679,14 @@
     if (!L || !L.rec || !t._out) return null;
     const items = t.items.filter((x) => L.rec.items.has(x.id)).map((x) => {
       const data = Object.assign({}, L.rec.items.get(x.id));
-      const o = { id: x.id, itemData: data };
+      // Zotero matches repeated citations by uris and reads uris.length for embedded items:
+      // the item's real Zotero URIs when the import kept them, else a stable local one
+      const known = data.custom && Array.isArray(data.custom.uris) ? data.custom.uris.filter(Boolean) : [];
+      // the fallback names the work, not the document's key: two documents' "smith2020" for
+      // different works get different URIs, repeated citations of one work the same one
+      const work = [data.type, data.title, data["container-title"], data["collection-title"], data.issued, data.author || data.editor, data.edition, data.volume, data.issue,
+        data.number, data.page, data.publisher, data["publisher-place"], data.DOI, data.ISBN, data.ISSN, data.URL];
+      const o = { id: x.id, uris: known.length ? known : ["http://zotero.org/users/local/docxmd/items/" + hash(JSON.stringify(work)).replace(":", "-")], itemData: data };
       ["locator", "label", "prefix", "suffix", "suppress-author"].forEach((k) => { if (x[k] != null) o[k] = typeof x[k] === "string" ? x[k].trim() : x[k]; });
       if (part === "author") { o["author-only"] = true; delete o["suppress-author"]; }
       else if (part === "rest" || t.narrative) o["suppress-author"] = true;
@@ -762,26 +772,27 @@
     if (!Z || typeof DOMParser === "undefined" || typeof XMLSerializer === "undefined") return null;
     let files;
     try { files = await Z.read(ab); } catch (e) { return null; }
-    const docB = files.get("word/document.xml"); if (!docB) return null;
-    const xml = Z.text(docB);
-    if (!/ZOTERO_ITEM|CSL_CITATION|MENDELEY_CITATION|CITATION\s|ZOTERO_BIBL|BIBLIOGRAPHY/.test(xml)) return null;
-    const doc = new DOMParser().parseFromString(xml, "application/xml");
-    const body = doc.getElementsByTagNameNS(NS_W, "body")[0]; if (!body) return null;
-    const W = (n) => doc.createElementNS(NS_W, "w:" + n);
-    const markerRun = (text) => { const r = W("r"), t = W("t"); t.setAttribute("xml:space", "preserve"); t.textContent = text; r.appendChild(t); return r; };
-    const markerPara = (text) => { const p = W("p"); p.appendChild(markerRun(text)); return p; };
-    const paraOf = (n) => { while (n && !(n.localName === "p" && n.namespaceURI === NS_W)) n = n.parentNode; return n; };
+    if (!files.get("word/document.xml")) return null;
+    // the body, footnotes and endnotes: a citation in a note becomes [@key] there as well. Parts
+    // are picked by structure (fields, content controls): a field code may be split over runs
+    // ("CITA" + "TION …"), so its words are only checked after the runs are joined
+    const FIELD_RE = /<w:fldChar\b|<w:fldSimple\b|<w:sdt\b/;
+    const parts = ["word/document.xml", "word/footnotes.xml", "word/endnotes.xml"].filter((n) => files.get(n) && FIELD_RE.test(Z.text(files.get(n))));
+    if (!parts.length) return null;
     // Word sources (customXml)
     const sources = new Map();
     for (const [name, data] of files) if (/^customXml\/item\d+\.xml$/i.test(name)) { const x = Z.text(data); if (/bibliography/.test(x)) wordSources(x).forEach((it) => sources.set(it.id, it)); }
     const cites = [], items = new Map();
-    let bib = false, n = 0;
+    let bib = false;
     const addCsl = (ci) => {
       const out = [];
       (ci.citationItems || []).forEach((c) => {
         const data = c.itemData || {};
-        const uri = (c.uris || c.uri || [])[0] || "";
-        const sig = uri || data.DOI || JSON.stringify([data.title, data.issued, (data.author || [])[0]]);
+        const uris = [].concat(c.uris || c.uri || []).filter((u) => typeof u === "string" && u);
+        const uri = uris[0] || "";
+        // two works may share title, author and year: the field's item id tells them apart
+        const iid = c.id != null ? c.id : data.id;
+        const sig = uri || data.DOI || JSON.stringify([iid == null ? null : String(iid), data.title, data.issued, (data.author || [])[0]]);
         let key = null;
         for (const [k, v] of items) if (v._sig === sig) { key = k; break; }
         if (!key) {
@@ -789,6 +800,7 @@
           while (items.has(k2)) k2 = base + String.fromCharCode(97 + i++);
           key = k2;
           const it = Object.assign({}, data, { id: key }); Object.defineProperty(it, "_sig", { value: sig, enumerable: false });
+          if (uris.length) it.custom = Object.assign({}, data.custom, { uris });   // kept for the next Zotero export
           items.set(key, it);
         }
         const o = { id: key };
@@ -808,6 +820,17 @@
       if (/ZOTERO_BIBL|CSL_BIBLIOGRAPHY|^\s*BIBLIOGRAPHY\b/i.test(instr)) { bib = true; return BIB_MARK; }
       return null;
     };
+    let doc = null, W = null;
+    const markerRun = (text) => { const r = W("r"), t = W("t"); t.setAttribute("xml:space", "preserve"); t.textContent = text; r.appendChild(t); return r; };
+    const markerPara = (text) => { const p = W("p"); p.appendChild(markerRun(text)); return p; };
+    const paraOf = (n) => { while (n && !(n.localName === "p" && n.namespaceURI === NS_W)) n = n.parentNode; return n; };
+    const runsOf = (p) => Array.from(p.getElementsByTagNameNS(NS_W, "r"));
+    const hasText = (rs) => rs.some((r) => Array.from(r.getElementsByTagNameNS(NS_W, "t")).some((t) => (t.textContent || "").trim()));
+    for (const name of parts) {
+    doc = new DOMParser().parseFromString(Z.text(files.get(name)), "application/xml");
+    W = (n) => doc.createElementNS(NS_W, "w:" + n);
+    const body = name === "word/document.xml" ? doc.getElementsByTagNameNS(NS_W, "body")[0] : doc.documentElement;
+    if (!body) continue;
     // 1) complex fields: begin … instrText … separate … end
     const runs = Array.from(body.getElementsByTagNameNS(NS_W, "r"));
     const stack = [], fields = [];
@@ -825,10 +848,27 @@
       const mark = handle(f.instr); if (!mark) return;
       const pb = paraOf(f.begin), pe = paraOf(f.end);
       if (mark === BIB_MARK && pb && pe && pb !== pe && pb.parentNode === pe.parentNode) {
-        // the bibliography spans paragraphs: replace them all by one marker paragraph
-        const parent = pb.parentNode; let p = pb; const kill = [];
-        while (p) { kill.push(p); if (p === pe) break; p = p.nextSibling; }
-        parent.insertBefore(markerPara(mark), pb); kill.forEach((x) => x.parentNode && x.parentNode.removeChild(x));
+        // the bibliography spans paragraphs: one marker paragraph instead; prose before the field
+        // in its first paragraph and after it in its last one stays
+        const parent = pb.parentNode, rb = runsOf(pb), re = runsOf(pe);
+        const ia = rb.indexOf(f.begin), ie = re.indexOf(f.end);
+        // prose before the begin character / after the end character (in other runs or in the same run)
+        const sideText = (r, tp, before) => { const kids = Array.from(r.childNodes), at = kids.findIndex((c) => c.nodeType === 1 && c.localName === "fldChar" && (c.getAttributeNS(NS_W, "fldCharType") || c.getAttribute("w:fldCharType")) === tp); return kids.some((c, k) => (before ? k < at : k > at) && c.nodeType === 1 && c.localName === "t" && (c.textContent || "").trim()); };
+        const keepB = ia >= 0 && (hasText(rb.slice(0, ia)) || sideText(f.begin, "begin", true)), keepE = ie >= 0 && (hasText(re.slice(ie + 1)) || sideText(f.end, "end", false));
+        const mid = []; for (let p = pb.nextSibling; p && p !== pe; p = p.nextSibling) mid.push(p);
+        parent.insertBefore(markerPara(mark), keepB ? pb.nextSibling : pb);
+        mid.forEach((x) => x.parentNode && x.parentNode.removeChild(x));
+        // a boundary run may hold prose next to its field character: only the field side goes
+        const fieldChar = (r, tp) => Array.from(r.childNodes).find((c) => c.nodeType === 1 && c.localName === "fldChar" && (c.getAttributeNS(NS_W, "fldCharType") || c.getAttribute("w:fldCharType")) === tp);
+        const trimRun = (r, tp, after) => {
+          const fc = fieldChar(r, tp), kids = Array.from(r.childNodes), at = kids.indexOf(fc);
+          if (at < 0) { r.parentNode && r.parentNode.removeChild(r); return; }
+          kids.forEach((c, k) => { if (c.nodeType === 1 && c.localName !== "rPr" && (after ? k >= at : k <= at)) r.removeChild(c); });
+          // only a run left with nothing but its properties goes (a drawing or tab after the field stays)
+          if (!Array.from(r.childNodes).some((c) => c.nodeType === 1 && c.localName !== "rPr")) r.parentNode && r.parentNode.removeChild(r);
+        };
+        if (keepB) { trimRun(rb[ia], "begin", true); rb.slice(ia + 1).forEach((r) => r.parentNode && r.parentNode.removeChild(r)); } else pb.parentNode && pb.parentNode.removeChild(pb);
+        if (keepE) { re.slice(0, ie).forEach((r) => r.parentNode && r.parentNode.removeChild(r)); trimRun(re[ie], "end", false); } else pe.parentNode && pe.parentNode.removeChild(pe);
         return;
       }
       if (!pb || pb !== pe) return;
@@ -846,7 +886,9 @@
     // 3) Mendeley Cite: content controls tagged MENDELEY_CITATION_v3_<base64 JSON> / MENDELEY_BIBLIOGRAPHY
     Array.from(body.getElementsByTagNameNS(NS_W, "sdt")).forEach((sdt) => {
       if (!sdt.parentNode) return;
-      const tag = Array.from(sdt.getElementsByTagNameNS(NS_W, "tag"))[0];
+      // the control's own w:sdtPr/w:tag — not the tag of a citation nested inside it
+      const pr = Array.from(sdt.childNodes).find((c) => c.nodeType === 1 && c.localName === "sdtPr" && c.namespaceURI === NS_W);
+      const tag = pr ? Array.from(pr.childNodes).find((c) => c.nodeType === 1 && c.localName === "tag" && c.namespaceURI === NS_W) : null;
       const v = tag ? tag.getAttributeNS(NS_W, "val") || tag.getAttribute("w:val") || "" : "";
       let mark = null;
       const mc = /^MENDELEY_CITATION_v3_(.+)$/.exec(v);
@@ -856,6 +898,8 @@
       const inPara = sdt.parentNode.localName === "p";
       sdt.parentNode.replaceChild(inPara ? markerRun(mark) : markerPara(mark), sdt);
     });
+    files.set(name, Z.bytes(new XMLSerializer().serializeToString(doc)));
+    }
     if (!cites.length && !bib) return null;
     // the style chosen in Zotero / Mendeley (document properties)
     let style = null;
@@ -868,7 +912,6 @@
       if (sm) style = sm[1];
       else { const mm = /name="Mendeley Recent Style Id 0_1"[^>]*>\s*<vt:lpwstr>([^<]+)</.exec(cx); if (mm) style = decodeEnt(mm[1]); }
     }
-    files.set("word/document.xml", Z.bytes(new XMLSerializer().serializeToString(doc)));
     const out = await Z.write(files);
     return { ab: out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength), cites, items, style, bib };
   }
@@ -901,7 +944,7 @@
     out = out.replace(/^[ \t]*ZQBIBZQ[ \t]*$/m, "[BIB]").replace(/ZQBIBZQ/g, "");
     if (!hasBib && pre.cites.length) out = out.replace(/\s*$/, "\n\n[BIB]\n");
     const list = Array.from(pre.items.values());
-    if (list.length) out = out.replace(/\s*$/, "\n\n```csl-json\n" + JSON.stringify(list, null, 2) + "\n```\n");
+    if (list.length) out = out.replace(/\s*$/, "") + "\n\n```csl-json\n" + JSON.stringify(list, null, 2) + "\n```\n";   // concatenated: "$&" in a title stays literal
     const meta = {};
     if (pre.style) {
       const id = String(pre.style).replace(/^https?:\/\/www\.zotero\.org\/styles\//, "").replace(/^https?:\/\/[^/]+\/.*\//, "");

@@ -418,10 +418,11 @@
   // Word import (mammoth HTML): pictures that carry a diagram → text markers ⟦MMD:n⟧
   function importHtml(html) {
     const blocks = [];
+    blocks.nonce = Math.random().toString(36).slice(2, 8).replace(/[^a-z0-9]/g, "") || "x";
     const out = String(html || "").replace(/<img\b[^>]*\balt="(mermaid:[^"]+)"[^>]*>/gi, (m, alt) => {
       const o = decodeAlt(alt.replace(/&#x2F;/g, "/").replace(/&#43;/g, "+").replace(/&amp;/g, "&"));
       if (!o) return m;
-      return "MMDBLOCK" + (blocks.push(o) - 1) + "MMDEND";
+      return "MMDBLOCK" + blocks.nonce + "N" + (blocks.push(o) - 1) + "MMDEND";
     });
     return { html: out, blocks };
   }
@@ -429,17 +430,37 @@
   function importMd(md, blocks) {
     if (!blocks || !blocks.length) return md;
     const lines = String(md).split("\n");
+    const MARK = new RegExp("MMDBLOCK" + (blocks.nonce || "") + "N(\\d+)MMDEND", "g");
+    const plain = (x) => String(x).replace(/\\(.)/g, "$1").replace(/^[ \t]*[*_]+|[*_]+[ \t]*$/g, "").trim();
     for (let i = 0; i < lines.length; i++) {
-      const m = /MMDBLOCK(\d+)MMDEND/.exec(lines[i]); if (!m) continue;
-      const o = blocks[+m[1]];
-      const fence = /```/.test(o.code) ? "~~~~" : "```";
-      const block = fence + "mermaid" + infoString(o) + "\n" + o.code.replace(/\n+$/, "") + "\n" + fence;
-      lines[i] = lines[i].replace(/\s*MMDBLOCK\d+MMDEND\s*/, "").trim() ? lines[i].replace(/MMDBLOCK\d+MMDEND/, "\n\n" + block + "\n\n") : block;
-      // our own caption paragraph under the picture ("Рисунок 2 — …"): the block carries it
+      if (!blocks.nonce || lines[i].indexOf("MMDBLOCK" + blocks.nonce + "N") < 0) continue;
+      // every diagram of the line (two pictures can share a Word paragraph), the text around stays
+      const used = [];
+      const parts = lines[i].split(MARK);          // text, n, text, n, …, text
+      let out = "";
+      for (let k = 0; k < parts.length; k++) {
+        if (k % 2 === 0) { if (parts[k].trim()) out += (out ? "\n\n" : "") + parts[k].trim(); continue; }
+        const o = blocks[+parts[k]];
+        // an unresolved marker stays text — as its own paragraph, never glued to a closing fence
+        if (!o) { out += (out ? "\n\n" : "") + "MMDBLOCK" + blocks.nonce + "N" + parts[k] + "MMDEND"; continue; }
+        used.push(o);
+        const fence = /```/.test(o.code) ? "~~~~" : "```";
+        out += (out ? "\n\n" : "") + fence + "mermaid" + infoString(o) + "\n" + o.code.replace(/\n+$/, "") + "\n" + fence;
+      }
+      lines[i] = out;
+      // our own caption paragraph under the picture: "Рисунок 2 — caption" (or a bare "Рисунок 2"
+      // for an id without a caption), or the plain italic caption of a diagram without an id.
+      // Only a caption that belongs to this diagram is removed — any other "Figure 7 — …" stays.
+      const o = used[used.length - 1];
+      if (!o || !(o.id || o.caption)) continue;
       let j = i + 1; while (j < lines.length && !lines[j].trim()) j++;
-      // … or the plain italic caption of a diagram without an id
-      const plain = (x) => String(x).replace(/\\(.)/g, "$1").replace(/^[ \t]*[*_]+|[*_]+[ \t]*$/g, "").trim();
-      if ((o.id || o.caption) && j < lines.length && (CAPTION_LINE.test(lines[j].replace(/\\/g, "")) || (o.caption && plain(lines[j]) === String(o.caption).trim()))) lines.splice(j, 1);
+      if (j >= lines.length) continue;
+      const ln = lines[j].replace(/\\/g, ""), cap = o.caption ? String(o.caption).trim() : "";
+      const own = CAPTION_LINE.test(ln) && (cap ? plain(ln.replace(/^[^—]*—\s*/, "")) === cap && /—/.test(ln) : !/—/.test(ln));
+      // the export writes the caption of a diagram without an id as one italic paragraph:
+      // only that form is taken for it — the same words as ordinary text stay
+      const italic = /^[ \t]*(\*|_)(?!\1)[\s\S]*[^*_\s]\1[ \t]*$/.test(lines[j]);
+      if (own || (cap && !o.id && italic && plain(lines[j]) === cap)) lines.splice(j, 1);
     }
     // a centred picture came wrapped in <div align="center"> — the diagram is centred anyway
     return lines.join("\n").replace(/<div align="center">\s*\n+((?:```|~~~~)mermaid[^\n]*\n[\s\S]*?\n(?:```|~~~~))\s*\n+<\/div>/g, "$1");
@@ -543,7 +564,10 @@
     });
     if (Object.keys(tv).length) o.themeVariables = tv; else delete o.themeVariables;
     const rest = m ? code.replace(INIT_RE, "") : code;
-    return Object.keys(o).length ? "%%{init: " + JSON.stringify(o) + "}%%\n" + rest : rest;
+    if (!Object.keys(o).length) return rest;
+    // Mermaid wants YAML front matter on the very first line: the directive goes after it (as in set3D)
+    const fm = /^---\n[\s\S]*?\n---\n/.exec(rest), dir = "%%{init: " + JSON.stringify(o) + "}%%\n";
+    return fm ? fm[0] + dir + rest.slice(fm[0].length) : dir + rest;
   }
   // text case of a label; tags (<br>) and entities stay as they are
   function recase(text, mode) {
@@ -600,15 +624,31 @@
     return code;
   }
   // source range of the code of the ```mermaid block whose body is oldCode
+  // Only diagrams that are rendered count: a ```mermaid fence shown inside a longer code fence
+  // (a Markdown example) is text of that block and is skipped.
   function replaceBlock(source, oldCode, newCode, nth) {
-    const re = /(^|\n)( {0,3})(`{3,}|~{3,})([ \t]*mermaid\b[^\n`]*)\n([\s\S]*?)(\n {0,3}\3[`~]*[ \t]*)(?=\n|$)/g;
-    let m, n = nth || 0;
-    while ((m = re.exec(source))) {
-      if (m[5] === oldCode || m[5].replace(/\s+$/, "") === String(oldCode).replace(/\s+$/, "")) {
-        if (n-- > 0) continue;
-        const s = m.index + m[1].length + m[2].length + m[3].length + m[4].length + 1;
-        return { start: s, end: s + m[5].length, text: newCode };
+    const src = String(source), lines = src.split("\n");
+    const want = String(oldCode).replace(/\s+$/, "");
+    let n = nth || 0, pos = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const open = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+      const lineStart = pos; pos += lines[i].length + 1;
+      if (!open || (open[2][0] === "`" && /`/.test(open[3]))) continue;
+      const ch = open[2][0], len = open[2].length, isMmd = /^[ \t]*mermaid\b/.test(open[3]);
+      const closeRe = new RegExp("^ {0,3}" + (ch === "`" ? "`" : "~") + "{" + len + ",}[ \\t]*$");
+      let j = i + 1, bodyStart = pos, bodyEnd = -1, p2 = pos;
+      for (; j < lines.length; j++) { if (closeRe.test(lines[j])) { bodyEnd = p2 - 1; break; } p2 += lines[j].length + 1; }
+      if (bodyEnd < 0) bodyEnd = src.length;
+      if (isMmd) {
+        const body = bodyEnd > bodyStart ? src.slice(bodyStart, bodyEnd) : "";
+        if (body === oldCode || body.replace(/\s+$/, "") === want) {
+          if (n-- <= 0) return { start: bodyStart, end: Math.max(bodyStart, bodyEnd), text: newCode };
+        }
       }
+      void lineStart;
+      // skip the whole fence (its content is never a diagram of its own)
+      for (let k = i + 1; k <= j && k < lines.length; k++) pos += lines[k].length + 1;
+      i = j;
     }
     return null;
   }

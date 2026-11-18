@@ -81,9 +81,29 @@
     return rs;
   }
   // fn on the parts of tx[s, e) outside code / math of the WHOLE text (a piece may be just "code" of `code`)
-  function outsideWithin(tx, s, e, fn) {
+  // link / image destinations ](url "title") as whole ranges — for UPPER / lower case only: "$X$"
+  // in a file name must not split the address, so none of it is recased
+  const LINKDEST_RE = /\]\((?:<[^<>\n]*>|[^()\s]*(?:\([^()\s]*\)[^()\s]*)*)(?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?\)/g;
+  // "](" ends a link label only when an unescaped "[" opens it on the same line (\[literal](x) is text)
+  function opensLink(tx, at) {
+    let depth = 0;
+    for (let i = at - 1; i >= 0 && tx[i] !== "\n"; i--) {
+      let bs = 0; for (let k = i - 1; k >= 0 && tx[k] === "\\"; k--) bs++;
+      if (bs % 2) continue;                                   // an escaped bracket
+      if (tx[i] === "]") depth++;
+      else if (tx[i] === "[") { if (!depth) return true; depth--; }
+    }
+    return false;
+  }
+  function caseRanges(tx) {
+    const rs = protectedRanges(tx).slice();
+    LINKDEST_RE.lastIndex = 0; let m;
+    while ((m = LINKDEST_RE.exec(tx))) if (opensLink(tx, m.index)) rs.push([m.index, m.index + m[0].length]);
+    return rs.sort((x, y) => x[0] - y[0]);
+  }
+  function outsideWithin(tx, s, e, fn, ranges) {
     let out = "", pos = s;
-    for (const [a, b] of protectedRanges(tx)) {
+    for (const [a, b] of (ranges || protectedRanges(tx))) {
       if (b <= pos || a >= e) continue;
       if (a > pos) out += fn(tx.slice(pos, a));
       const end = Math.min(b, e); out += tx.slice(Math.max(a, pos), end); pos = end;
@@ -313,7 +333,7 @@
         (m.length > 1 && (m[0] === "<" || m[0] === "&" || m[0] === "]")) ? m : (upper ? m.toLocaleUpperCase() : m.toLocaleLowerCase()));
     }
     function caseSeg(tx, s, e, upper) {
-      const a = tx.slice(s, e), b = outsideWithin(tx, s, e, (seg) => recaseText(seg, upper));
+      const a = tx.slice(s, e), b = outsideWithin(tx, s, e, (seg) => recaseText(seg, upper), caseRanges(tx));
       return a === b ? { noop: true } : { start: s, end: e, text: b, selStart: s, selEnd: s + b.length };
     }
     function setCase(upper) {

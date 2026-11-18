@@ -56,7 +56,15 @@
     const plainMath = PLAIN_MATH_RE.test(plain);
     let prefer = "plain";
     if (html && /<[a-z]/i.test(html)) {
-      if (score >= 2) prefer = "plain";
+      // equations only the HTML can restore (KaTeX / MathJax / MathML) win over Markdown-looking
+      // plain text in which they are flattened; plain text that keeps them as TeX stays preferred
+      // TeX in the plain text, outside code (a code span with `$x$` is no equation)
+      const bare = plain.replace(/^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[ \t]*$/gm, "").replace(/`[^`\n]*`/g, "");
+      const plainEq = (bare.match(/\\\(|\\\[|\$\$[\s\S]*?\$\$|(?:^|[^\\$\w])\$[^\s$][^$\n]*\$|\\begin\{/gm) || []).length;
+      // equations the HTML carries: MathML / KaTeX / MathJax nodes, outermost-ish count
+      const htmlEq = (html.match(/<math[\s>]|<mjx-container\b|application\/x-tex|math\/tex|\bdata-(?:math|latex|tex)=/gi) || []).length;
+      if (math && htmlEq > plainEq) prefer = "html";
+      else if (score >= 2) prefer = "plain";
       else if (math || source) prefer = "html";
     }
     const ai = !!(source || math || artifacts || plainMath);
