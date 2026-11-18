@@ -25,16 +25,26 @@
   const mul = (A, B) => ({ a: A.a * B.a + A.b * B.c, b: A.a * B.b + A.b * B.d, c: A.c * B.a + A.d * B.c, d: A.c * B.b + A.d * B.d, e: A.e * B.a + A.f * B.c + B.e, f: A.e * B.b + A.f * B.d + B.f });
 
   // a DIB (BITMAPINFO + bits) → PNG data URI
-  async function dibPng(u8, start, offBmi, cbBmi, offBits, cbBits) {
+  // src: the part of the bitmap the record transfers ({ x, y, w, h }; null = all of it). The ranges are
+  // checked by the caller against the record; any failure here is just "no picture" (never a throw)
+  async function dibPng(u8, start, offBmi, cbBmi, offBits, cbBits, src) {
     if (cbBmi < 40 || !cbBits || typeof createImageBitmap === "undefined") return null;
-    const bmp = new Uint8Array(14 + cbBmi + cbBits), bv = new DataView(bmp.buffer);
-    bmp[0] = 0x42; bmp[1] = 0x4D; bv.setUint32(2, bmp.length, true); bv.setUint32(10, 14 + cbBmi, true);
-    bmp.set(u8.subarray(start + offBmi, start + offBmi + cbBmi), 14);
-    bmp.set(u8.subarray(start + offBits, start + offBits + cbBits), 14 + cbBmi);
     try {
+      const bmp = new Uint8Array(14 + cbBmi + cbBits), bv = new DataView(bmp.buffer);
+      bmp[0] = 0x42; bmp[1] = 0x4D; bv.setUint32(2, bmp.length, true); bv.setUint32(10, 14 + cbBmi, true);
+      bmp.set(u8.subarray(start + offBmi, start + offBmi + cbBmi), 14);
+      bmp.set(u8.subarray(start + offBits, start + offBits + cbBits), 14 + cbBmi);
       const bm = await createImageBitmap(new Blob([bmp], { type: "image/bmp" }));
-      const cv = document.createElement("canvas"); cv.width = bm.width; cv.height = bm.height;
-      cv.getContext("2d").drawImage(bm, 0, 0);
+      let sx = 0, sy = 0, sw = bm.width, sh = bm.height;
+      if (src && src.w > 0 && src.h > 0) {
+        // a bottom-up DIB (positive height) counts ySrc from its lower edge; the decoded image from the top
+        const bottomUp = new DataView(u8.buffer, u8.byteOffset + start + offBmi, 12).getInt32(8, true) > 0;
+        const y0 = bottomUp ? bm.height - (src.y + src.h) : src.y;
+        sx = Math.max(0, Math.min(bm.width - 1, src.x)); sy = Math.max(0, Math.min(bm.height - 1, y0));
+        sw = Math.max(1, Math.min(bm.width - sx, src.w)); sh = Math.max(1, Math.min(bm.height - sy, src.h));
+      }
+      const cv = document.createElement("canvas"); cv.width = sw; cv.height = sh;
+      cv.getContext("2d").drawImage(bm, sx, sy, sw, sh, 0, 0, sw, sh);
       return cv.toDataURL("image/png");
     } catch (e) { return null; }
   }
@@ -51,7 +61,8 @@
       pen: STOCK[7], brush: STOCK[0], font: STOCK[13], textColor: "#000000", align: 0, fillMode: 1, cur: { x: 0, y: 0 }
     };
     const stack = [], objs = {}, out = [];
-    let path = null;                                          // inside BEGINPATH … ENDPATH: the d of the path
+    let path = null;                                          // the d of the current path (BEGINPATH … FILL / STROKE)
+    let building = false;                                     // true only between BEGINPATH and ENDPATH
     // logical point → device point (reference device units, like rclBounds)
     const page = () => {
       const m = st.mapMode;
@@ -92,7 +103,7 @@
       const rx = Math.abs(e1[0] - c[0]) || Math.hypot(e1[0] - c[0], e1[1] - c[1]), ry = Math.abs(e2[1] - c[1]) || Math.hypot(e2[0] - c[0], e2[1] - c[1]);
       return "M" + r2(c[0] - rx) + "," + r2(c[1]) + " A" + r2(rx) + "," + r2(ry) + " 0 1,0 " + r2(c[0] + rx) + "," + r2(c[1]) + " A" + r2(rx) + "," + r2(ry) + " 0 1,0 " + r2(c[0] - rx) + "," + r2(c[1]) + " Z";
     };
-    const shape = (d, fill, stroke) => { if (path !== null) path += " " + d; else emit(d, fill, stroke); };
+    const shape = (d, fill, stroke) => { if (building) path += " " + d; else emit(d, fill, stroke); };
     const images = [];
     for (let i = 0; i + 8 <= u8.length;) {
       const type = dv.getUint32(i, true), size = dv.getUint32(i + 4, true);
@@ -131,17 +142,17 @@
             break;
           }
           case 40: delete objs[dv.getUint32(o + 8, true)]; break;                                            // DELETEOBJECT
-          case 27: st.cur = { x: dv.getInt32(o + 8, true), y: dv.getInt32(o + 12, true) }; if (path !== null) path += " M" + pt(st.cur.x, st.cur.y); break;
+          case 27: st.cur = { x: dv.getInt32(o + 8, true), y: dv.getInt32(o + 12, true) }; if (building) path += " M" + pt(st.cur.x, st.cur.y); break;
           case 54: { const x = dv.getInt32(o + 8, true), y = dv.getInt32(o + 12, true);                      // LINETO
-            if (path !== null) path += " L" + pt(x, y); else emit("M" + pt(st.cur.x, st.cur.y) + " L" + pt(x, y), false, true);
+            if (building) path += " L" + pt(x, y); else emit("M" + pt(st.cur.x, st.cur.y) + " L" + pt(x, y), false, true);
             st.cur = { x, y }; break; }
           case 3: case 86: { const w = type === 3, n = dv.getUint32(o + 24, true); shape(polyD(points(o + 28, n, w), true), true, true); break; }   // POLYGON(16)
           case 4: case 87: { const w = type === 4, n = dv.getUint32(o + 24, true); shape(polyD(points(o + 28, n, w), false), false, true); break; } // POLYLINE(16)
           case 2: case 85: { const w = type === 2, n = dv.getUint32(o + 24, true); shape(bezD(points(o + 28, n, w), false), false, true); break; }  // POLYBEZIER(16)
           case 5: case 88: case 6: case 89: {                                                                 // POLYBEZIERTO / POLYLINETO (16)
             const w = type === 5 || type === 6, bz = type === 5 || type === 88, n = dv.getUint32(o + 24, true), pts = points(o + 28, n, w);
-            const d = (path !== null ? "" : "M" + pt(st.cur.x, st.cur.y)) + (bz ? bezD(pts, true) : pts.map((p) => " L" + pt(p[0], p[1])).join(""));
-            if (path !== null) path += d; else emit(d, false, true);
+            const d = (building ? "" : "M" + pt(st.cur.x, st.cur.y)) + (bz ? bezD(pts, true) : pts.map((p) => " L" + pt(p[0], p[1])).join(""));
+            if (building) path += d; else emit(d, false, true);
             if (pts.length) st.cur = { x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] };
             break;
           }
@@ -160,13 +171,13 @@
               " L" + pt(l + cw, b) + " Q" + pt(l, b) + " " + pt(l, b - ch) + " L" + pt(l, t + ch) + " Q" + pt(l, t) + " " + pt(l + cw, t) + " Z";
             shape(d, true, true); break; }
           case 42: shape(ellipseD(dv.getInt32(o + 8, true), dv.getInt32(o + 12, true), dv.getInt32(o + 16, true), dv.getInt32(o + 20, true)), true, true); break;   // ELLIPSE
-          case 59: path = ""; break;                                                                          // BEGINPATH
-          case 61: if (path !== null) path += " Z"; break;                                                    // CLOSEFIGURE
-          case 60: break;                                                                                     // ENDPATH (path kept for FILL / STROKE)
-          case 62: emit(path, true, false); path = null; break;                                               // FILLPATH
-          case 63: emit(path, true, true); path = null; break;                                                // STROKEANDFILLPATH
-          case 64: emit(path, false, true); path = null; break;                                               // STROKEPATH
-          case 68: path = null; break;                                                                        // ABORTPATH
+          case 59: path = ""; building = true; break;                                                         // BEGINPATH
+          case 61: if (building) path += " Z"; break;                                                         // CLOSEFIGURE
+          case 60: building = false; break;                                                                   // ENDPATH: the path is complete; later shapes draw at once
+          case 62: if (path !== null) emit(path, true, false); path = null; building = false; break;          // FILLPATH
+          case 63: if (path !== null) emit(path, true, true); path = null; building = false; break;           // STROKEANDFILLPATH
+          case 64: if (path !== null) emit(path, false, true); path = null; building = false; break;          // STROKEPATH
+          case 68: path = null; building = false; break;                                                      // ABORTPATH
           case 84: {                                                                                          // EXTTEXTOUTW
             const T = o + 36, x = dv.getInt32(T, true), y = dv.getInt32(T + 4, true), n = dv.getUint32(T + 8, true), offS = dv.getUint32(T + 12, true), opt = dv.getUint32(T + 16, true), offDx = dv.getUint32(T + 36, true);
             if (!n || o + offS + n * 2 > o + size) break;
@@ -175,10 +186,15 @@
             if (opt & 0x10) break;
             let text = ""; for (let k = 0; k < n; k++) text += String.fromCharCode(dv.getUint16(o + offS + k * 2, true));
             text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "");
+            // TA_UPDATECP: the text starts at the current position (not the record's point) and moves it on —
+            // also for a record of spaces only, which draws nothing but still advances
+            const upd = (st.align & 1) === 1, rx = upd ? st.cur.x : x, ry = upd ? st.cur.y : y;
+            const f = st.font || STOCK[13];
+            let adv = 0; if (offDx && o + offDx + n * 4 * ((opt & 0x2000) ? 2 : 1) <= o + size) for (let k = 0; k < n; k++) adv += dv.getInt32(o + offDx + k * 4 * ((opt & 0x2000) ? 2 : 1), true);
+            if (upd) st.cur = { x: rx + (adv || Math.round(text.length * Math.abs(f.height || 12) * 0.5)), y: ry };
             if (!text.trim()) break;
-            const f = st.font || STOCK[13], p0 = dev(x, y), sc = scale();
+            const p0 = dev(rx, ry), sc = scale();
             const fs = Math.max(1, Math.abs(f.height || 12) * sc * (f.height > 0 ? 0.82 : 1));
-            let adv = 0; if (offDx && o + offDx + n * 4 <= o + size) for (let k = 0; k < n; k++) adv += dv.getInt32(o + offDx + k * 4 * ((opt & 0x2000) ? 2 : 1), true);
             const al = st.align, hor = (al & 6) === 6 ? "middle" : (al & 6) === 2 ? "end" : "start";
             const vert = (al & 24) === 24 ? "alphabetic" : (al & 8) ? "text-after-edge" : "text-before-edge";
             const ang = f.esc ? -f.esc / 10 : 0;
@@ -202,8 +218,12 @@
               if (fill) out.push('<rect x="' + r2(Math.min(a[0], b[0])) + '" y="' + r2(Math.min(a[1], b[1])) + '" width="' + r2(Math.abs(b[0] - a[0])) + '" height="' + r2(Math.abs(b[1] - a[1])) + '" fill="' + fill + '"/>');
               break;
             }
+            // the bitmap must lie inside this record — a broken one is skipped, the rest of the picture stays
+            if (offBmi + cbBmi > size || offBits + cbBits > size || cbBmi < 40) break;
+            const SRC = { 81: [32, 36, 40, 44], 80: [32, 36, 40, 44], 76: [44, 48, null, null], 77: [44, 48, 100, 104] }[type];
+            const src = { x: dv.getInt32(o + SRC[0], true), y: dv.getInt32(o + SRC[1], true), w: SRC[2] ? dv.getInt32(o + SRC[2], true) : cx, h: SRC[3] ? dv.getInt32(o + SRC[3], true) : cy };
             const slot = out.length; out.push("");
-            images.push(dibPng(u8, o, offBmi, cbBmi, offBits, cbBits).then((href) => {
+            images.push(dibPng(u8, o, offBmi, cbBmi, offBits, cbBits, src).catch(() => null).then((href) => {
               if (href) out[slot] = '<image x="' + r2(Math.min(a[0], b[0])) + '" y="' + r2(Math.min(a[1], b[1])) + '" width="' + r2(Math.abs(b[0] - a[0])) + '" height="' + r2(Math.abs(b[1] - a[1])) + '" preserveAspectRatio="none" href="' + href + '"/>';
             }));
             break;

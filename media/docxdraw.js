@@ -334,7 +334,7 @@
           const tx = l.align === "middle" ? x + w / 2 : l.align === "end" ? x + w - ri : x + li;
           const spans = l.parts.map((p) => '<tspan font-size="' + Math.round(p.r.size * 96 / 72 * 100) / 100 + '"' + (p.r.bold ? ' font-weight="bold"' : "") + (p.r.italic ? ' font-style="italic"' : "") +
             (p.r.color || fontRef ? ' fill="' + (p.r.color || fontRef.hex) + '"' : "") + ">" + esc(p.text) + "</tspan>").join("");
-          texts.push('<text x="' + tx + '" y="' + (ty - l.h * 0.22) + '" text-anchor="' + l.align + '"' + tf + ">" + spans + "</text>");
+          texts.push('<text x="' + Math.round(tx * 100) / 100 + '" y="' + Math.round((ty - l.h * 0.22) * 100) / 100 + '" text-anchor="' + l.align + '"' + tf + ">" + spans + "</text>");
         });
       }
     };
@@ -342,7 +342,7 @@
     if (!body.length && !texts.length) return null;
     const tidy = (str) => str.replace(/(\d+\.\d{2})\d+/g, "$1");
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + Math.round(W / EMU_PX) + " " + Math.round(H / EMU_PX) + '" width="' + Math.round(W / EMU_PX) + '" height="' + Math.round(H / EMU_PX) + '" font-family="' + family + '" fill="#000">' +
-      (defs.size ? "<defs>" + Array.from(defs.values()).join("") + "</defs>" : "") + tidy(body.join("") + texts.join("")) + "</svg>";
+      (defs.size ? "<defs>" + Array.from(defs.values()).join("") + "</defs>" : "") + tidy(body.join("")) + texts.join("") + "</svg>";       // labels keep their own digits ("1.2345 mm")
     return { svg, w: W, h: H };
   }
 
@@ -380,7 +380,9 @@
       return "data:" + mime + ";base64," + btoa(bin);
     };
     const W_ = (n) => doc.createElementNS(NS.w, "w:" + n);
-    const markerRun = (i) => { const r = W_("r"), t = W_("t"); t.textContent = "DOCXMDSHAPE" + i + "X"; r.appendChild(t); return r; };
+    // a marker no document text can contain: the import's own random key (finishHtml / finishMd match it)
+    shapes.nonce = Math.random().toString(36).slice(2, 8).replace(/[^a-z0-9]/g, "") || "k";
+    const markerText = (i) => { const t = W_("t"); t.textContent = "DOCXMDSHAPE" + shapes.nonce + "N" + i + "X"; return t; };
     // 1) shapes: the run that holds the drawing (or its mc:AlternateContent) becomes a marker run
     desc(body, "w", "drawing").forEach((dr) => {
       if (!dr.isConnected) return;
@@ -389,12 +391,19 @@
       let r;
       try { r = renderDrawing(dr, theme, defaultPt, image); } catch (e) { console.warn("DOCXMDDraw shape", e); r = null; }
       if (!r) return;
-      const run = dr.closest ? dr.closest("r") : null;
-      const host = (function () { let n = dr; while (n && !(n.localName === "r" && n.namespaceURI === NS.w)) n = n.parentNode; return n; })() || run;
-      if (!host || !host.parentNode) return;
+      // what is replaced: the mc:AlternateContent around the drawing (mammoth reads only its Fallback, so
+      // a marker inside the Choice would be lost) or the drawing itself — never the whole run: text and
+      // run properties next to the drawing stay ("Total: " + picture)
+      let alt = null;
+      for (let n = dr.parentNode; n && n !== body; n = n.parentNode) if (n.localName === "AlternateContent" && n.namespaceURI === NS.mc) { alt = n; break; }
+      const target = alt || dr;
+      if (!target.parentNode) return;
       const an = kid(dr, "wp", "anchor");
       shapes.push({ svg: r.svg, pct: Math.max(1, Math.min(100, Math.round(r.w / textW * 1000) / 10)), px: Math.round(r.w / EMU_PX), anchor: an ? anchorInfo(an) : null });
-      host.parentNode.replaceChild(markerRun(shapes.length - 1), host);
+      const t = markerText(shapes.length - 1);
+      const inRun = target.parentNode.localName === "r" && target.parentNode.namespaceURI === NS.w;
+      if (inRun) target.parentNode.replaceChild(t, target);
+      else { const run = W_("r"); run.appendChild(t); target.parentNode.replaceChild(run, target); }
     });
     // 2) floating pictures: where Word puts them → the description (read back in finishHtml)
     let anchors = 0;
@@ -433,11 +442,12 @@
     // is placed like a floating picture; inline shapes stay markers for finishMd
     if (anchoredShapes) {
       const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT), hits = [];
-      while (walker.nextNode()) if (/DOCXMDSHAPE\d+X/.test(walker.currentNode.data)) hits.push(walker.currentNode);
+      const MK = new RegExp("(DOCXMDSHAPE" + shapes.nonce + "N\\d+X)");
+      while (walker.nextNode()) if (MK.test(walker.currentNode.data)) hits.push(walker.currentNode);
       hits.forEach((tn) => {
         const frag = document.createDocumentFragment();
-        tn.data.split(/(DOCXMDSHAPE\d+X)/).forEach((part) => {
-          const m = /^DOCXMDSHAPE(\d+)X$/.exec(part), sh = m && shapes[+m[1]];
+        tn.data.split(MK).forEach((part) => {
+          const m = new RegExp("^DOCXMDSHAPE" + shapes.nonce + "N(\\d+)X$").exec(part), sh = m && shapes[+m[1]];
           if (sh && sh.anchor) {
             const img = document.createElement("img");
             img.setAttribute("src", "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(sh.svg))));
@@ -448,6 +458,16 @@
         tn.replaceWith(frag);
       });
     }
+    // page / margin-relative vertical offsets: the smallest of each host, taken before any picture is
+    // rewritten (their alt text — the metadata — is replaced in the loop below)
+    const readInfo = (x) => { try { const a = x.getAttribute("alt"), j = a.indexOf("|", ANCHOR_TAG.length); return JSON.parse(a.slice(ANCHOR_TAG.length, j < 0 ? a.length : j)); } catch (e) { return null; } };
+    const pageRel = (inf) => inf && inf.v && inf.v.off != null && !/^(paragraph|line)$/.test(inf.v.rel || "paragraph");
+    const hostMin = new Map();
+    tpl.content.querySelectorAll('img[alt^="' + ANCHOR_TAG + '"]').forEach((x) => {
+      const inf = readInfo(x); if (!pageRel(inf)) return;
+      const hp = x.closest("p, td, th, li") || x.parentNode;
+      hostMin.set(hp, Math.min(hostMin.has(hp) ? hostMin.get(hp) : Infinity, inf.v.off));
+    });
     tpl.content.querySelectorAll('img[alt^="' + ANCHOR_TAG + '"]').forEach((img) => {
       const alt = img.getAttribute("alt"), bar = alt.indexOf("|", ANCHOR_TAG.length);
       let info = null; try { info = JSON.parse(alt.slice(ANCHOR_TAG.length, bar < 0 ? alt.length : bar)); } catch (e) {}
@@ -459,7 +479,14 @@
       if (!info.inCell && h.rel === "page") left -= info.marginL || 0;
       if (h.rel === "character") left = 0;
       if (/^(wrapNone)$/.test(info.wrap) || info.wrap === "wrapThrough" && info.behind) {
-        const top = v.off != null && /^(paragraph|line)$/.test(v.rel || "paragraph") ? v.off : 0;
+        // paragraph / line: Word's offset from the paragraph. page / margin (an origin the preview has
+        // not got): the pictures of one paragraph keep their distance to each other — the highest at 0
+        let top = 0;
+        if (v.off != null && /^(paragraph|line)$/.test(v.rel || "paragraph")) top = v.off;
+        else if (v.off != null) {
+          const hostP = img.closest("p, td, th, li") || img.parentNode;
+          top = v.off - (hostMin.has(hostP) ? Math.min(v.off, hostMin.get(hostP)) : v.off);
+        }
         const box = document.createElement("span");
         box.setAttribute("data-docxmd-float", "1");
         // a left-aligned paragraph with a first-line indent (a form line with its check box in the indent):
@@ -492,8 +519,8 @@
   // markers → the SVG pictures (embedded; the app folds them into #embedded-image-N tokens)
   function finishMd(md, shapes) {
     if (!shapes || !shapes.length) return md;
-    return md.replace(/DOCXMDSHAPE(\d+)X/g, (m, i) => {
-      const s = shapes[+i]; if (!s) return "";
+    return md.replace(new RegExp("DOCXMDSHAPE" + shapes.nonce + "N(\\d+)X", "g"), (m, i) => {
+      const s = shapes[+i]; if (!s) return m;          // unknown index: left as it is
       const b64 = btoa(unescape(encodeURIComponent(s.svg)));
       return "\n\n![](data:image/svg+xml;base64," + b64 + "){width=" + s.pct + "%}\n\n";
     }).replace(/\n{3,}/g, "\n\n");

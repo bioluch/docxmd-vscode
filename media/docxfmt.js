@@ -324,11 +324,11 @@
   }
 
   // Pretty, blank-line-free HTML so the whole table stays one Markdown HTML block
-  // the text column of the imported document in px (set by toMarkdown): Word-laid-out tables never get
-  // narrower than they are in Word — on a phone they scroll sideways, and drawings placed over them
-  // (a flowchart across the rows) keep matching the rows and columns
-  let textColPx = 640;
+  // Word-laid-out tables never get narrower than they are in Word (the text column of THIS import, carried
+  // on each table as data-docxmd-textw — no state shared between imports): on a phone they scroll
+  // sideways, and drawings placed over them (a flowchart across the rows) keep matching rows and columns
   function tableHtml(table) {
+    const textColPx = +table.getAttribute("data-docxmd-textw") || 640;
     const cols = (table.getAttribute("data-docxmd-cols") || "").split(",").filter(Boolean);
     const tw = table.getAttribute("data-docxmd-width");
     const nested = !!(table.parentElement && table.parentElement.closest && table.parentElement.closest("td,th"));
@@ -351,7 +351,8 @@
       x.querySelectorAll('a[id^="sec_"]:not([href])').forEach((a) => { const p = a.parentElement; if (p && p !== x && !p.id) p.id = "sec:" + unBookmark(a.id, "sec"); });
       x.querySelectorAll("a[id]:not([href])").forEach((a) => { if (!a.textContent && !a.children.length) a.remove(); });
       // a table nested in the cell: the same clean HTML (widths, colours) instead of its internal markers
-      Array.from(x.querySelectorAll("table")).reverse().forEach((nt) => {
+      // only tables directly in this cell: tableHtml of each handles the levels below it (once)
+      Array.from(x.querySelectorAll("table")).filter((nt) => nt.parentElement && nt.parentElement.closest("td,th") === x).forEach((nt) => {
         const tmp = document.createElement("div"); tmp.innerHTML = tableHtml(nt);
         if (tmp.firstElementChild) nt.replaceWith(tmp.firstElementChild);
       });
@@ -759,9 +760,10 @@
   // Paragraphs inside cells: HTML tables keep them as line breaks (Markdown tables:
   // spaces); a centred paragraph among others becomes <div style="text-align:…">.
   // Consecutive aligned body paragraphs are grouped into one <div data-docxmd-align>.
-  function cleanHtml(html) {
+  function cleanHtml(html, textColPx) {
     const tpl = document.createElement("template");
     tpl.innerHTML = html;
+    if (textColPx) tpl.content.querySelectorAll("table").forEach((t) => t.setAttribute("data-docxmd-textw", textColPx));
     inlineSizes(tpl.content);
     const alignOf = (p) => { const m = /\bdocxmd-align-(center|right)\b/.exec(p.className || ""); return m ? m[1] : null; };
     tpl.content.querySelectorAll("td p, th p").forEach((p) => {
@@ -849,7 +851,8 @@
       try { drawn = await global.DOCXMDDraw.prepare(ab); if (drawn && drawn.ab) ab = drawn.ab; } catch (e) { console.warn("DOCXFMT drawings", e); drawn = null; }
     }
     const [docXml, stylesXml] = await Promise.all([readZipEntry(ab, "word/document.xml"), readZipEntry(ab, "word/styles.xml")]);
-    // the text column (last section: page width minus margins, twips → px)
+    // the text column of this document (last section: page width minus margins, twips → px)
+    let textColPx = 640;
     try {
       const sp = /<w:sectPr\b[\s\S]*<w:pgSz\b[^>]*w:w="(\d+)"[\s\S]*?<w:pgMar\b([^>]*)>/.exec(docXml || "");
       if (sp) { const L = +((/w:left="(\d+)"/.exec(sp[2]) || [])[1] || 1440), R = +((/w:right="(\d+)"/.exec(sp[2]) || [])[1] || 1440); textColPx = Math.max(300, Math.round((+sp[1] - L - R) / 15)); }
@@ -881,7 +884,7 @@
     // pictures that carry a Mermaid diagram (alt text "mermaid:…", written by DOCXMD) → the diagram source
     const MMD = global.DOCXMDMermaid, mmd = MMD ? MMD.importHtml(html) : null;
     if (mmd) html = mmd.html;
-    let md = td.turndown(cleanHtml(html)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
+    let md = td.turndown(cleanHtml(html, textColPx)).replace(/\n{3,}/g, "\n\n").trim() + "\n";
     if (drawn && drawn.shapes.length) md = global.DOCXMDDraw.finishMd(md, drawn.shapes);
     if (mmd && mmd.blocks.length) md = MMD.importMd(md, mmd.blocks).replace(/\n{3,}/g, "\n\n");
     let citeMeta = null;
