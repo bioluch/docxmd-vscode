@@ -4,7 +4,7 @@
 
 Write Markdown in VS Code with a live preview and get a real Word document: native equations, citations and a reference list, numbered diagrams, tables, footnotes, headers and page numbers. Import Word back to Markdown. Everything runs locally; nothing is uploaded.
 
-![DOCXMD — Markdown source and live preview side by side](https://docxmd.pp.ua/help/img/overview.png)
+![DOCXMD — Markdown source and live preview side by side](https://docxmd.pp.ua/help/img/overview_en.png)
 
 ## Why DOCXMD
 
@@ -56,13 +56,13 @@ The extension's editor uses the same interface, themes and converter as the [DOC
 
 | | |
 |---|---|
-| ![Formatting toolbar](https://docxmd.pp.ua/help/img/toolbar.png) | ![Find highlights every match in the source and the preview](https://docxmd.pp.ua/help/img/find.png) |
+| ![Formatting toolbar](https://docxmd.pp.ua/help/img/toolbar_en.png) | ![Find highlights every match in the source and the preview](https://docxmd.pp.ua/help/img/find_en.png) |
 | **Formatting toolbar** — bold, x² / x₂, Ω symbols, headings, callouts, lists, links, images, tables, alignment | **Find & replace** — every match highlighted in the source and the preview |
 | ![Callout blocks](https://docxmd.pp.ua/help/img/callouts_en.png) | ![Colour boxes](https://docxmd.pp.ua/help/img/boxes_en.png) |
 | **Callout blocks** `:::warning` / `> [!NOTE]` — kept as tinted boxes in Word | **Colour boxes** `:::red … :::` |
-| ![Footnotes, numbered figures and tables, table of contents](https://docxmd.pp.ua/help/img/structure_en.png) | ![Styling Markdown with HTML](https://docxmd.pp.ua/help/img/styling.png) |
+| ![Footnotes, numbered figures and tables, table of contents](https://docxmd.pp.ua/help/img/structure_en.png) | ![Styling Markdown with HTML](https://docxmd.pp.ua/help/img/styling_en.png) |
 | **Footnotes, numbered figures & tables, cross-references, table of contents** | **HTML styling** — the source on the left, the result on the right |
-| ![Translation dialog](https://docxmd.pp.ua/help/img/translate.png) | ![Themes and languages](https://docxmd.pp.ua/help/img/themes.png) |
+| ![Translation dialog](https://docxmd.pp.ua/help/img/translate_en.png) | ![Themes and languages](https://docxmd.pp.ua/help/img/themes_en.png) |
 | **Translate** into English · Українська · Español · 中文 | **4 themes · 4 interface languages** |
 
 
