@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4
+
+Shared with the DOCXMD web app 3.1:
+
+- **Editing in the preview:** text with emoji or other characters outside the basic plane no longer shifts the place an edit or a style goes to.
+- Interface texts updated in all 7 languages.
+
 ## 0.7.3
 
 - **Extension page:** all screenshots in the description load again (six of them pointed at renamed help images).
