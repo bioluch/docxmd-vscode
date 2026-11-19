@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3
+
+- **Extension page:** all screenshots in the description load again (six of them pointed at renamed help images).
+
 ## 0.7.2
 
 Word import is much closer to the original, shared with the DOCXMD web app 3.0.27 (checked on 39 quality-management procedures against LibreOffice):
