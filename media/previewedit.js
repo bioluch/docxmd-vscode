@@ -646,7 +646,8 @@
     let entBox = null;
     function visibleMap(src, base, html) {
       let text = ""; const at = [], to = [];
-      const put = (s, a, b) => { for (const ch of s) { text += ch; at.push(base + a); to.push(base + b); } };
+      // one entry per UTF-16 unit, like DOM offsets: an emoji (a surrogate pair) takes two
+      const put = (s, a, b) => { for (let u = 0; u < s.length; u++) { text += s[u]; at.push(base + a); to.push(base + b); } };
       for (let i = 0; i < src.length;) {
         const ch = src[i];
         if (ch === "<") { TAG_RE.lastIndex = i; const m = TAG_RE.exec(src); if (m) { i += m[0].length; continue; } }
@@ -768,11 +769,29 @@
       return true;
     }
 
+    // The caret / selection start in the preview as a position in the source (dictation, js/voice.js):
+    // { at } — exactly at the caret when the block's rendered text matches its visible source text,
+    // otherwise { at: end of that block, boundary: true } (the text goes in as a paragraph of its own —
+    // never onto a code fence or a table row); null when the selection is not in the preview.
+    function caretSource() {
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || !preview.contains(sel.anchorNode)) return null;
+      // a quick edit is committed first (that re-renders): the caller takes the end of block n later
+      if (pe.quick) { const c = qeContainer(sel.anchorNode); const n = c ? blockOf(c) : null; endQuickEdit(true); return n != null ? { block: n } : null; }
+      const rg = sel.getRangeAt(0), n = blockOf(rg.startContainer);
+      const r = n != null && blockRange(n);
+      if (!r) return null;
+      if (r.type === "frontMatter" || r.type === "code") return { at: r.end, boundary: true };
+      const dt = domText(n), k = dt.offset(rg.startContainer, rg.startOffset);
+      const vm = visibleMap(getText().slice(r.start, r.end), r.start, r.type === "html");
+      if (vm.text !== dt.text || !vm.at.length) return { at: r.end, boundary: true };
+      return { at: k < vm.at.length ? vm.at[k] : vm.to[vm.to.length - 1] };
+    }
     // a render replaces the preview DOM: close whatever editor is open first
     function beforeRender() { if (pe.block) closeBlockEditor(false); if (pe.quick) endQuickEdit(false); }
     function setBlocks(blocks, src) { pe.blocks = blocks || []; pe.src = src; }
     function close(apply) { if (pe.quick) endQuickEdit(apply); if (pe.block) closeBlockEditor(apply); }
-    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, reopenAt, selectSource, applyToBlock, blockRange,
+    return { pe, beforeRender, annotateBlocks, setBlocks, close, hideHandle, sourceSelection, caretSource, reopenAt, selectSource, applyToBlock, blockRange,
       busy: () => !!(pe.block || pe.quick) };
   }
 
