@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2
+
+Word import is much closer to the original, shared with the DOCXMD web app 3.0.27 (checked on 39 quality-management procedures against LibreOffice):
+
+- **Flowcharts drawn with Word shapes** — groups, drawing canvases and single shapes — become SVG pictures with their boxes, connectors, arrows, colours and text. A flowchart laid over a table stays on its rows.
+- **Floating pictures and shapes** stay where Word puts them: a stamp over the signature line, check boxes in front of form lines.
+- **EMF pictures** (Visio drawings, plans) are shown: a new EMF → SVG renderer draws lines, shapes, text and embedded bitmaps. WMF uses WMFJS (rtf.js, MIT), loaded only when needed.
+- **Tables:** each paragraph of a cell stays its own line, empty lines keep the row height, nested tables keep their widths, rotated header text stays vertical (and goes back to Word), paragraph indents in cells are kept.
+- Fixes from a code review of the new import code.
+
 ## 0.7.1
 
 Fixes from a code review, shared with the DOCXMD web app 3.0.11:
