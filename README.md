@@ -95,6 +95,7 @@ The extension's editor uses the same interface, themes and converter as the [DOC
 - **Import Word (`.docx`) to Markdown** — keeps table cell fills, text colours and horizontal/vertical alignment, merged cells, superscripts/subscripts and images.
 - **Styled tables** — HTML tables with inline `style` (background, colour, `text-align`, `vertical-align`, `colspan`/`rowspan`) export to Word with the same formatting.
 - **Translate documents** into the interface languages (English · Українська · Español · 中文) with DeepL.
+- **Spell-checking** (toolbar **A✓**) — misspelled words in the preview get a red wavy underline; click one for suggestions (the pick replaces the word in the Markdown, one `Ctrl+Z` undoes it) or **Add to my dictionary**. Hunspell runs on your computer; Ukrainian, Russian, English (US and British), Spanish, Portuguese, German, French, Polish and Italian. The document language comes from front matter `lang:` or is detected; Cyrillic and Latin quotations are checked in their own alphabet. Code, formulas, abbreviations and the front matter are skipped.
 - **Help** button — opens the full illustrated guide in your browser.
 - 4 themes for the editor and preview.
 - Split / Source / Preview modes.
@@ -226,6 +227,10 @@ Pick a target language from the **🌐 Translate…** menu in the toolbar (Engli
 
 Translation uses **DeepL** and requires your own API key. On first use you will be asked for it; it is stored in the `docxmd.deeplApiKey` setting and sent only to DeepL. If the key's monthly quota is used up (or the key is rejected), a dialog lets you enter another key and the translation continues; you can also run **DOCXMD: Set DeepL API key** at any time. Get a free key at <https://www.deepl.com/pro-api>.
 
+### Spell-checking
+
+The **A✓** button in the toolbar turns it on or off (on by default). Misspelled words in the preview are underlined; click one to pick a suggestion or add the word to your dictionary (kept per language in VS Code). Each dictionary (0.5–8 MB) is downloaded once, the first time a document needs it, from `https://docxmd.pp.ua/models/dict/` and kept in the extension's storage; the text being checked never leaves VS Code. Set `lang: de` (or `en-GB`, `uk`, …) in the front matter to choose the language yourself.
+
 ### Help
 
 Click the **?** button to open the full illustrated guide (screenshots, HTML-styling recipes, smart editing and all keyboard shortcuts) at <https://docxmd.pp.ua/?help=1> in your browser.
@@ -250,7 +255,7 @@ DOCXMD uses local copies of its Markdown rendering, syntax highlighting, sanitiz
 
 The extension is designed to perform Markdown editing, preview rendering, `.docx` generation and `.docx` import locally inside VS Code. The DOCXMD PWA does not need to be running for the extension to edit Markdown files or generate Word documents.
 
-The only feature that uses the network is **translation**: when you translate a document, its text is sent to the DeepL API using your own API key. Nothing else leaves your machine. The **Help** button opens the online guide in your browser.
+The network is used for **translation** (the document text is sent to the DeepL API with your own API key) and to download a **spell-checking dictionary** once (from docxmd.pp.ua; only the dictionary is downloaded, your text is checked locally). Nothing else leaves your machine. The **Help** button opens the online guide in your browser.
 
 ## Development
 
@@ -280,4 +285,4 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## Credits
 
-Citations: citeproc-js (CPAL / AGPL) implements the Citation Style Language (citationstyles.org). CSL styles and locales: CC BY-SA 3.0. DSTU 8302:2015 style: Yuriy Nabasov (MIT). Diagrams: Mermaid (MIT).
+Citations: citeproc-js (CPAL / AGPL) implements the Citation Style Language (citationstyles.org). CSL styles and locales: CC BY-SA 3.0. DSTU 8302:2015 style: Yuriy Nabasov (MIT). Diagrams: Mermaid (MIT). Spell-checking: Hunspell (MPL / GPL / LGPL) compiled to WebAssembly by hunspell-asm (MIT); dictionaries (downloaded on first use, not part of the extension) from wooorm/dictionaries — Ukrainian brown-uk/dict_uk (GPL-3.0), English SCOWL (MIT, BSD), Spanish RLA-ES (GPL / LGPL / MPL), Portuguese and Russian LibreOffice (LGPL / MPL, BSD-3), German igerman98 (GPL), French Grammalecte (MPL-2.0), Polish sjp.pl (GPL / LGPL / MPL), Italian plio.it (GPL-3.0).

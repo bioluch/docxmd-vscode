@@ -338,3 +338,11 @@ br.jl-br { display: none; }
 .ts-pop .ts-row { display: flex; align-items: center; gap: .6rem; justify-content: space-between; }
 .ts-pop .ts-custom { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; color: var(--text-muted); }
 .ts-pop .ts-custom input { width: 34px; height: 24px; padding: 0; border: none; background: none; cursor: pointer; }
+.markdown-body .sp-err { text-decoration: underline wavy var(--danger); text-decoration-skip-ink: none; text-underline-offset: 3px; cursor: pointer; }
+.sp-menu { position: fixed; z-index: 90; width: min(260px, calc(100vw - 16px)); padding: .5rem; border-radius: 12px; background: var(--bg-card); box-shadow: 0 8px 24px var(--shadow-dark); display: flex; flex-direction: column; gap: .3rem; }
+.sp-menu .sp-word { font-weight: 600; font-size: .85rem; color: var(--danger); padding: .1rem .3rem; overflow-wrap: anywhere; }
+.sp-menu .sp-list { display: flex; flex-direction: column; gap: .15rem; }
+.sp-menu .sp-wait { font-size: .82rem; color: var(--text-muted); padding: .2rem .3rem; }
+.sp-menu button { text-align: left; font: inherit; font-size: .9rem; padding: .35rem .5rem; border: 0; border-radius: 8px; background: transparent; color: var(--text-main); cursor: pointer; }
+.sp-menu button:hover, .sp-menu button:focus-visible { background: var(--bg-base); outline: none; }
+.sp-menu .sp-add { font-size: .82rem; color: var(--text-muted); border-top: 1px solid var(--border-subtle); border-radius: 0 0 8px 8px; }

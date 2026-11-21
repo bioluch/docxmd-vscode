@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.5
+
+- **Spell-checking** in the preview, shared with the DOCXMD web app 3.1: the new **A✓** toolbar button turns it on or off. Misspelled words get a red wavy underline; a click shows suggestions — the pick replaces the word in the Markdown (one `Ctrl+Z` undoes it) — or **Add to my dictionary**. Hunspell runs on your computer for Ukrainian, Russian, English (US and British), Spanish, Portuguese, German, French, Polish and Italian; the language comes from front matter `lang:` or is detected. Each dictionary is downloaded once from docxmd.pp.ua on first use and kept in the extension's storage; the text itself never leaves VS Code.
+- Interface texts updated in all 7 languages.
+
 ## 0.7.4
 
 Shared with the DOCXMD web app 3.1:

@@ -2,7 +2,7 @@
   "name": "docxmd",
   "displayName": "DOCXMD — Markdown editor & DOCX converter",
   "description": "Private offline Markdown ↔ Word converter for researchers, students, technical writers and ChatGPT/AI users: native Word equations, citations (BibTeX, Zotero; APA, IEEE, DSTU 8302), Mermaid diagrams, Word import — with a live preview.",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "publisher": "docxmd",
   "engines": {
     "vscode": "^1.80.0"

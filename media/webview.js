@@ -153,6 +153,87 @@
     afterEdit: () => { if (typeof syncActiveLine === "function") syncActiveLine(); },
     t: (k, v) => t(k, v), toast: (m) => info(m)
   }) : null;
+  /* ---------- spell-checking (media/spell.js, Hunspell on this computer, shared with the web app) ----------
+     Misspelled words in the preview get a red wavy underline; a click shows the suggestions and the pick
+     replaces that word in the Markdown (one undo step). The A✓ button turns it on / off. The worker is a
+     blob (Hunspell build + spell-worker.js); its dictionaries come from the extension host. */
+  const SPELL = window.DOCXMDSpell || null;
+  let spellTimer = 0, spellRun = 0, langTimer = 0, langGen = 0;
+  const dictWait = new Map(); let dictSeq = 0;
+  function hostDict(lang) {
+    return new Promise((resolve, reject) => { const id = ++dictSeq; dictWait.set(id, { resolve, reject }); vscode.postMessage({ type: "spellDict", id, lang }); });
+  }
+  async function makeSpellWorker() {
+    const b = document.body.dataset;
+    const [lib, code] = await Promise.all([fetch(b.hunspell).then((r) => r.text()), fetch(b.spellWorker).then((r) => r.text())]);
+    const url = URL.createObjectURL(new Blob([lib, "\n;\n", code], { type: "text/javascript" }));
+    const w = new Worker(url);
+    // the worker asks for a dictionary → the host reads it from its storage (or downloads it once)
+    w.addEventListener("message", (e) => {
+      const m = e.data || {};
+      if (m.type !== "dict") return;
+      hostDict(m.lang).then((d) => w.postMessage({ type: "dictData", rid: m.rid, aff: d.aff, dic: d.dic }),
+        (err) => w.postMessage({ type: "dictData", rid: m.rid, error: String((err && err.message) || err) }));
+    });
+    return w;
+  }
+  if (SPELL) SPELL.configure({ t: (k, v) => t(k, v), esc: escapeHtml, makeWorker: makeSpellWorker });
+  const docLang = () => preview.getAttribute("lang") || LANG;
+  function spellSoon() {
+    if (!SPELL) return;
+    clearTimeout(spellTimer);
+    const run = ++spellRun;                                    // a newer render makes this pass stale
+    spellTimer = setTimeout(() => {
+      if (!SPELL.enabled() || PE.busy() || mode() === "source") return;
+      SPELL.markPreview(preview, docLang(), () => run !== spellRun || PE.busy());
+    }, 700);
+  }
+  // the document's language: front matter "lang:", else detected from the text, else the interface language
+  function updateSpellLang() {
+    if (!SPELL) return;
+    clearTimeout(langTimer);
+    const gen = ++langGen;                                     // a detection still running is for the old text
+    langTimer = setTimeout(async () => {
+      const v = ta.value;
+      let lang = "";
+      try {
+        const fm = window.MD2DOCX && MD2DOCX.parseFrontMatter ? MD2DOCX.parseFrontMatter(v) : null;
+        if (fm && fm.meta && fm.meta.lang) lang = String(fm.meta.lang).trim();
+        if (!lang) {
+          const sample = (window.MDTranslate && MDTranslate.prose ? MDTranslate.prose(v) : v).slice(0, 3000);
+          if (sample.trim().length > 20) lang = await SPELL.detectLang(sample);
+        }
+      } catch (e) { lang = ""; }
+      lang = lang || LANG;
+      if (gen !== langGen) return;
+      if (preview.getAttribute("lang") !== lang) { preview.setAttribute("lang", lang); spellSoon(); }
+    }, 1200);
+  }
+  const spellBtn = $("#spellBtn");
+  function setSpellBtn() { if (spellBtn) { const on = !!(SPELL && SPELL.enabled()); spellBtn.classList.toggle("active", on); spellBtn.setAttribute("aria-pressed", on ? "true" : "false"); } }
+  if (spellBtn) {
+    if (!SPELL) spellBtn.hidden = true;
+    else {
+      setSpellBtn();
+      spellBtn.addEventListener("click", () => {
+        SPELL.setEnabled(!SPELL.enabled()); setSpellBtn();
+        if (SPELL.enabled()) spellSoon(); else { SPELL.closeMenu(); SPELL.unmark(preview); }
+      });
+    }
+  }
+  // a click on an underlined word: the suggestions; the pick replaces the n-th such word in the Markdown
+  preview.addEventListener("click", (e) => {
+    const sp = SPELL && e.target.closest && e.target.closest("span.sp-err");
+    if (!sp || PE.busy()) return;
+    e.preventDefault(); e.stopPropagation();
+    const word = sp.textContent, total = SPELL.count(preview, word), nth = SPELL.occurrence(preview, sp);
+    SPELL.openMenu(sp, word, sp.dataset.spDict, (rep) => {
+      if (rep == null) { spellSoon(); return; }               // added to the dictionary: underline again without it
+      // the same occurrence in the Markdown: front matter, code, link addresses… are not counted
+      const r = SPELL.sourceRange(ta.value, word, nth, total);
+      if (r) editRange(r[0], r[1], rep);
+    });
+  }, true);
 
   /* ---------- citations (cite.js + citeproc) and Mermaid diagrams (mermaidx.js) — as in the web app ---------- */
   const CITE = window.DOCXMDCite || null, MMDX = window.DOCXMDMermaid || null;
@@ -222,6 +303,7 @@
     buildOutline(heads);
     updateStats();
     if (findState.active) runFind(false); else schedulePaint();
+    updateSpellLang(); spellSoon();                           // the language may have changed; the words did
   }
 
   // Internal links (TOC, @refs, footnotes) scroll inside the preview
@@ -290,6 +372,9 @@
       exportHtml();
     } else if (msg.type === "requestFlush") {
       if (editTimer) flushEdit();
+    } else if (msg.type === "spellDict") {
+      const w = dictWait.get(msg.id);
+      if (w) { dictWait.delete(msg.id); if (msg.error) w.reject(new Error(msg.error)); else w.resolve(msg); }
     } else if (msg.type === "deeplResult") {
       const p = __tlPending[msg.id];
       if (p) { delete __tlPending[msg.id]; msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.translations || []); }

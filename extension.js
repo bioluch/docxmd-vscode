@@ -6,6 +6,56 @@ const vscode = require("vscode");
 const path = require("path");
 const https = require("https");
 
+/* ---------- spell-checking dictionaries (Hunspell) ----------
+   Not shipped in the extension (0.5–8 MB each): downloaded once from the DOCXMD site and kept in the
+   extension's global storage. Only the dictionary is fetched; the text being checked never leaves VS Code. */
+const SPELL_DICTS = ["uk", "ru", "en", "en-GB", "es", "pt", "de", "fr", "pl", "it"];
+const SPELL_URL = "https://docxmd.pp.ua/models/dict/";
+function httpsGetBuffer(url, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { timeout: 60000 }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirects > 0) {
+        res.resume();
+        let next;
+        try { next = new URL(res.headers.location, url); } catch (e) { reject(e); return; }
+        if (next.protocol !== "https:") { reject(new Error("insecure redirect")); return; }
+        httpsGetBuffer(next.href, redirects - 1).then(resolve, reject);
+        return;
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error("HTTP " + res.statusCode)); return; }
+      const chunks = []; let size = 0;
+      res.on("data", (c) => { size += c.length; if (size > 30 * 1024 * 1024) { req.destroy(new Error("dictionary too large")); return; } chunks.push(c); });
+      res.on("end", () => resolve(Buffer.concat(chunks)));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+}
+const spellLoads = new Map();                    // lang → Promise<{aff, dic}> (one download at a time per language)
+function spellDictionary(context, lang) {
+  if (!SPELL_DICTS.includes(lang)) return Promise.reject(new Error("no dictionary for " + lang));
+  if (!spellLoads.has(lang)) {
+    const p = (async () => {
+      const dir = vscode.Uri.joinPath(context.globalStorageUri, "dict", lang);
+      const files = {};
+      for (const ext of ["aff", "dic"]) {
+        const f = vscode.Uri.joinPath(dir, "index." + ext);
+        try { files[ext] = await vscode.workspace.fs.readFile(f); }
+        catch (e) {
+          const buf = await httpsGetBuffer(SPELL_URL + lang + "/index." + ext);
+          files[ext] = new Uint8Array(buf);
+          try { await vscode.workspace.fs.createDirectory(dir); await vscode.workspace.fs.writeFile(f, files[ext]); } catch (x) { /* works without the cache */ }
+        }
+      }
+      return { aff: files.aff, dic: files.dic };
+    })();
+    p.catch(() => spellLoads.delete(lang));      // a failed download can be tried again
+    spellLoads.set(lang, p);
+  }
+  return spellLoads.get(lang);
+}
+
 const VIEW_TYPE = "docxmd.editor";
 // Notation clean-up rules — the same module as the web app (media/sciclean.js)
 const SciClean = require("./media/sciclean.js").DOCXMDSciClean;
@@ -401,6 +451,11 @@ class DocxmdEditorProvider {
           }
         })();
       }
+      else if (msg.type === "spellDict") {
+        spellDictionary(this.context, String(msg.lang || ""))
+          .then((d) => webview.postMessage({ type: "spellDict", id: msg.id, aff: d.aff, dic: d.dic }))
+          .catch((e) => webview.postMessage({ type: "spellDict", id: msg.id, error: String((e && e.message) || e) }));
+      }
       else if (msg.type === "openTranslated") {
         (async () => {
           try {
@@ -435,14 +490,14 @@ class DocxmdEditorProvider {
 <html lang="${lang}" data-lang="${lang}" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${csp} https: data: blob:; connect-src ${csp} https: data: blob:; style-src ${csp} 'unsafe-inline'; font-src ${csp}; script-src ${csp} 'unsafe-eval';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${csp} https: data: blob:; connect-src ${csp} https: data: blob:; style-src ${csp} 'unsafe-inline'; font-src ${csp}; script-src ${csp} 'unsafe-eval'; worker-src blob:;">
 <link rel="stylesheet" href="${v("themes.css")}" />
 <link id="hljsLight" rel="stylesheet" href="${v("vendor", "hljs-github.css")}" disabled />
 <link id="hljsDark" rel="stylesheet" href="${v("vendor", "hljs-github-dark.css")}" />
 <link rel="stylesheet" href="${v("vendor", "katex.min.css")}" />
 <link rel="stylesheet" href="${v("webview.css")}" />
 </head>
-<body data-zotero="${vscode.workspace.getConfiguration("docxmd").get("zoteroFields") ? 1 : 0}" data-cite-base="${v("vendor", "citeproc")}/" data-mmd-base="${v("vendor", "mermaid")}/">
+<body data-zotero="${vscode.workspace.getConfiguration("docxmd").get("zoteroFields") ? 1 : 0}" data-hunspell="${v("vendor", "hunspell", "hunspell.iife.js")}" data-spell-worker="${v("spell-worker.js")}" data-cite-base="${v("vendor", "citeproc")}/" data-mmd-base="${v("vendor", "mermaid")}/">
   <div class="bar" role="toolbar">
     <button class="tb" id="outlineBtn" data-tt="view.outline" aria-pressed="false">${svg('<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>')}</button>
     <span class="sep"></span>
@@ -455,6 +510,7 @@ class DocxmdEditorProvider {
       <button class="tb" data-cmd="highlight" data-tt="tb.highlightKey"><span style="background:#fff176;color:#1a1a1a;padding:0 .2em;border-radius:3px;font-weight:700;font-size:.8rem">ab</span></button>
       <button class="tb" data-cmd="symbols" data-tt="tb.symbols">&Omega;</button>
       <button class="tb" data-cmd="cleanNotation" data-tt="tb.sciclean">${svg('<path d="M9 3h6"/><path d="M10 3v6.5L4.6 18.2A1.8 1.8 0 0 0 6.1 21h11.8a1.8 1.8 0 0 0 1.5-2.8L14 9.5V3"/><path d="M7.5 14h9"/>')}</button>
+      <button class="tb" id="spellBtn" data-tt="spell.tb" aria-pressed="true">${svg('<path d="M3 15l3.5-9 3.5 9"/><path d="M4.4 12h4.2"/><path d="M13 20l3 3 6-7" transform="translate(0 -5)"/>')}</button>
       <span class="sep"></span>
       <button class="tb" data-ts="font" data-tt="tb.fontFamily"><span class="ts-ico">Aa</span></button>
       <button class="tb" data-ts="size" data-tt="tb.fontSize">${svg('<path d="M3 7V5h11v2"/><path d="M8.5 5v14"/><path d="M13 12v-1.5h8V12"/><path d="M17 10.5V19"/>')}</button>
@@ -569,6 +625,7 @@ class DocxmdEditorProvider {
   <script src="${v("vendor", "turndown-plugin-gfm.js")}"></script>
   <script src="${v("aipaste.js")}"></script>
   <script src="${v("translate.js")}"></script>
+  <script src="${v("spell.js")}"></script>
   <script src="${v("vendor", "katex.min.js")}"></script>
   <script src="${v("webview.js")}"></script>
 </body>
