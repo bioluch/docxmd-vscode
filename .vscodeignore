@@ -3,3 +3,4 @@
 .gitignore
 *.vsix
 test/**
+DOCXMD_Folder/**
